@@ -14,7 +14,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="AraGPT2 — يتعلم منك على الهاتف"
+            android:text="H33 Qwen2.5 — مساعد عربي محلي"
             android:textStyle="bold"
             android:textSize="22sp"
             android:gravity="start" />
@@ -41,7 +41,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="72dp"
-            android:maxLines="5"
+            android:maxLines="6"
             android:hint="اكتب سؤالك هنا"
             android:gravity="start|top"
             android:inputType="textMultiLine|textCapSentences" />
@@ -50,7 +50,7 @@
             android:id="@+id/askButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="اسأل النموذج"
+            android:text="اسأل Qwen"
             android:enabled="false" />
 
         <TextView
@@ -65,9 +65,9 @@
             android:id="@+id/answerBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="110dp"
-            android:maxLines="9"
-            android:hint="سيظهر جواب AraGPT2 هنا"
+            android:minHeight="120dp"
+            android:maxLines="12"
+            android:hint="سيظهر جواب Qwen هنا"
             android:gravity="start|top"
             android:textIsSelectable="true"
             android:focusable="false"
@@ -77,7 +77,7 @@
             android:id="@+id/correctButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="✓ الإجابة صحيحة — عززها"
+            android:text="✓ الإجابة صحيحة — تذكّرها"
             android:enabled="false" />
 
         <TextView
@@ -93,7 +93,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:minHeight="110dp"
-            android:maxLines="9"
+            android:maxLines="10"
             android:hint="إذا كان الجواب خطأ، اكتب الجواب الصحيح هنا"
             android:gravity="start|top"
             android:inputType="textMultiLine|textCapSentences" />
@@ -102,7 +102,7 @@
             android:id="@+id/teachButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="علّم النموذج من التصحيح"
+            android:text="علّم من التصحيح"
             android:enabled="false" />
 
         <Button
@@ -115,7 +115,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="ملاحظة: زر مسح يمسح الحقول فقط. أوزان التعلم تبقى محفوظة محليًا على الهاتف."
+            android:text="التصحيحات تبقى محفوظة محليًا على الهاتف. هذه النسخة تستخدم ذاكرة تعلم مباشرة مع Qwen؛ تحديث أوزان Qwen نفسه يحتاج مسار تدريب native منفصل."
             android:textSize="12sp"
             android:paddingTop="8dp"
             android:gravity="start" />
