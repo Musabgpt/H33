@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import json
 
 import onnxruntime_genai as og
 
@@ -15,10 +16,16 @@ SYSTEM = (
     else "أنت مساعد عربي محلي. أجب مباشرة ولا تختلق معلومات."
 )
 
-def run_prompt(prompt: str, extra_tokens: int = 48) -> str:
-    model = og.Model(str(MODEL_DIR))
-    tokenizer = og.Tokenizer(model)
+print("Loading Qwen INT4 GenAI model...", flush=True)
+model = og.Model(str(MODEL_DIR))
+tokenizer = og.Tokenizer(model)
+
+def run_messages(messages, extra_tokens=48):
     stream = tokenizer.create_stream()
+    prompt = tokenizer.apply_chat_template(
+        json.dumps(messages, ensure_ascii=False),
+        add_generation_prompt=True,
+    )
     input_tokens = tokenizer.encode(prompt)
 
     params = og.GeneratorParams(model)
@@ -39,30 +46,22 @@ def run_prompt(prompt: str, extra_tokens: int = 48) -> str:
 
     return answer.replace("<|im_end|>", "").replace("<|endoftext|>", "").strip()
 
-print("Loading Qwen INT4 GenAI model...", flush=True)
-
-# Basic Arabic factual test.
-prompt = (
-    "<|im_start|>system\n" + SYSTEM + "<|im_end|>\n"
-    "<|im_start|>user\nما ناتج 7 ضرب 8؟ أجب بالرقم فقط.<|im_end|>\n"
-    "<|im_start|>assistant\n"
-)
-answer = run_prompt(prompt, 32)
+answer = run_messages([
+    {"role": "system", "content": SYSTEM},
+    {"role": "user", "content": "ما ناتج 7 ضرب 8؟ أجب بالرقم فقط."},
+], 32)
 print("SMOKE ANSWER:", answer, flush=True)
 if not answer:
     raise SystemExit("Qwen smoke test produced empty output")
 if "56" not in answer:
     raise SystemExit("Qwen smoke test did not answer the arithmetic prompt as expected")
 
-# Multi-turn session-memory test.
-memory_prompt = (
-    "<|im_start|>system\n" + SYSTEM + "<|im_end|>\n"
-    "<|im_start|>user\nاحفظ داخل هذه المحادثة فقط: الرمز التجريبي هو زمرد 4827.<|im_end|>\n"
-    "<|im_start|>assistant\nحسنًا، سأحتفظ به ضمن سياق هذه المحادثة.<|im_end|>\n"
-    "<|im_start|>user\nما الرمز التجريبي الذي ذكرته قبل قليل؟<|im_end|>\n"
-    "<|im_start|>assistant\n"
-)
-memory_answer = run_prompt(memory_prompt, 40)
+memory_answer = run_messages([
+    {"role": "system", "content": SYSTEM},
+    {"role": "user", "content": "احفظ داخل هذه المحادثة فقط: الرمز التجريبي هو زمرد 4827."},
+    {"role": "assistant", "content": "حسنًا، الرمز التجريبي في هذه المحادثة هو زمرد 4827."},
+    {"role": "user", "content": "ما الرمز التجريبي الذي ذكرته قبل قليل؟"},
+], 48)
 print("SESSION MEMORY ANSWER:", memory_answer, flush=True)
 if "4827" not in memory_answer and "زمرد" not in memory_answer:
     raise SystemExit("Qwen multi-turn session-memory smoke test failed")
