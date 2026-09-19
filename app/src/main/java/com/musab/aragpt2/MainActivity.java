@@ -10,6 +10,8 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.PopupMenu;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -30,8 +32,9 @@ public class MainActivity extends AppCompatActivity {
     private TextView status;
     private ScrollView chatScroll;
     private LinearLayout messagesContainer;
+    private LinearLayout composerBar;
     private EditText inputBox;
-    private Button sendButton, stopButton, newChatButton;
+    private Button sendButton, stopButton, newChatButton, plusButton;
 
     private volatile long generationId = 0L;
     private boolean busy = false;
@@ -44,10 +47,14 @@ public class MainActivity extends AppCompatActivity {
         status = findViewById(R.id.status);
         chatScroll = findViewById(R.id.chatScroll);
         messagesContainer = findViewById(R.id.messagesContainer);
+        composerBar = findViewById(R.id.composerBar);
         inputBox = findViewById(R.id.inputBox);
         sendButton = findViewById(R.id.sendButton);
         stopButton = findViewById(R.id.stopButton);
         newChatButton = findViewById(R.id.newChatButton);
+        plusButton = findViewById(R.id.plusButton);
+
+        styleComposer();
 
         addWelcomeMessage();
 
@@ -80,6 +87,7 @@ public class MainActivity extends AppCompatActivity {
         sendButton.setOnClickListener(v -> sendMessage());
         stopButton.setOnClickListener(v -> stopGeneration());
         newChatButton.setOnClickListener(v -> startNewChat());
+        plusButton.setOnClickListener(v -> showComposerMenu());
 
         inputBox.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEND) {
@@ -88,6 +96,60 @@ public class MainActivity extends AppCompatActivity {
             }
             return false;
         });
+    }
+
+    private void styleComposer() {
+        boolean night = (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+
+        int composerColor = night ? Color.rgb(47, 47, 47) : Color.rgb(242, 242, 242);
+        int iconColor = night ? Color.rgb(73, 73, 73) : Color.rgb(225, 225, 225);
+        int sendColor = night ? Color.WHITE : Color.rgb(25, 25, 25);
+        int sendText = night ? Color.BLACK : Color.WHITE;
+        int normalText = night ? Color.WHITE : Color.rgb(25, 25, 25);
+
+        GradientDrawable composer = new GradientDrawable();
+        composer.setColor(composerColor);
+        composer.setCornerRadius(dp(28));
+        composerBar.setBackground(composer);
+        composerBar.setElevation(dp(6));
+
+        inputBox.setTextColor(normalText);
+        inputBox.setHintTextColor(night ? Color.rgb(175, 175, 175) : Color.rgb(110, 110, 110));
+
+        styleRoundButton(plusButton, iconColor, normalText);
+        styleRoundButton(stopButton, iconColor, normalText);
+        styleRoundButton(sendButton, sendColor, sendText);
+    }
+
+    private void styleRoundButton(Button button, int background, int foreground) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.OVAL);
+        d.setColor(background);
+        button.setBackground(d);
+        button.setTextColor(foreground);
+        button.setElevation(dp(2));
+    }
+
+    private void showComposerMenu() {
+        PopupMenu menu = new PopupMenu(this, plusButton);
+        menu.getMenu().add("محادثة جديدة");
+        menu.getMenu().add("مسح النص");
+        menu.getMenu().add("إخفاء لوحة المفاتيح");
+        menu.setOnMenuItemClickListener(item -> {
+            String title = item.getTitle().toString();
+            if ("محادثة جديدة".equals(title)) {
+                startNewChat();
+            } else if ("مسح النص".equals(title)) {
+                inputBox.setText("");
+            } else {
+                InputMethodManager imm =
+                        (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                imm.hideSoftInputFromWindow(inputBox.getWindowToken(), 0);
+            }
+            return true;
+        });
+        menu.show();
     }
 
     private void sendMessage() {
