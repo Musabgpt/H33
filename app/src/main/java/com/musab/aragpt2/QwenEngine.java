@@ -80,8 +80,10 @@ public final class QwenEngine implements AutoCloseable {
 
         cancelRequested = false;
 
+        boolean hasWeb = webContext != null && !webContext.trim().isEmpty();
+
         String exact = memory.exactAnswer(q);
-        if (exact != null && !exact.isEmpty()) {
+        if (!hasWeb && exact != null && !exact.isEmpty()) {
             synchronized (conversation) {
                 conversation.add(new ChatTurn("user", q));
                 conversation.add(new ChatTurn("assistant", exact));
@@ -106,10 +108,12 @@ public final class QwenEngine implements AutoCloseable {
 
             try (GeneratorParams params = new GeneratorParams(model)) {
                 params.setSearchOption("max_length", (double) totalMaxLength);
-                params.setSearchOption("do_sample", true);
-                params.setSearchOption("temperature", 0.70);
-                params.setSearchOption("top_k", 20.0);
-                params.setSearchOption("top_p", 0.80);
+                params.setSearchOption("do_sample", !hasWeb);
+                if (!hasWeb) {
+                    params.setSearchOption("temperature", 0.70);
+                    params.setSearchOption("top_k", 20.0);
+                    params.setSearchOption("top_p", 0.80);
+                }
                 params.setSearchOption("repetition_penalty", 1.10);
 
                 try (Generator generator = new Generator(model, params);
@@ -238,14 +242,16 @@ public final class QwenEngine implements AutoCloseable {
                     .append("<|im_end|>\n");
         }
 
-        List<CorrectionMemory.Entry> examples = memory.bestExamples(question, 1);
-        for (CorrectionMemory.Entry e : examples) {
-            p.append("<|im_start|>user\n")
-                    .append(e.question)
-                    .append("<|im_end|>\n")
-                    .append("<|im_start|>assistant\n")
-                    .append(e.answer)
-                    .append("<|im_end|>\n");
+        if (webContext == null || webContext.trim().isEmpty()) {
+            List<CorrectionMemory.Entry> examples = memory.bestExamples(question, 1);
+            for (CorrectionMemory.Entry e : examples) {
+                p.append("<|im_start|>user\n")
+                        .append(e.question)
+                        .append("<|im_end|>\n")
+                        .append("<|im_start|>assistant\n")
+                        .append(e.answer)
+                        .append("<|im_end|>\n");
+            }
         }
 
         int start = Math.max(0, history.size() - MAX_HISTORY_MESSAGES);
