@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
         android:allowBackup="true"
-        android:label="AraGPT2 عربي"
+        android:label="H33 Qwen عربي"
         android:supportsRtl="true"
         android:theme="@style/Theme.AraGPT2">
         <activity
