@@ -10,50 +10,45 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.util.Arrays;
-import java.util.Random;
+import java.util.List;
 
 public final class RewardAdapter {
-    private static final int MAGIC = 0x41524131;
-    private static final int VERSION = 1;
-    private static final String FILE_NAME = "reward_adapter_v1.bin";
+    private static final int MAGIC = 0x41524132;
+    private static final int VERSION = 2;
+    private static final String FILE_NAME = "reward_adapter_v2.bin";
+    private static final int CONTEXT_TOKENS = 64;
 
-    private final int hiddenSize;
     private final int vocabSize;
     private final int rank;
-    private final float[] projection;
     private final float[] weights;
     private final File saveFile;
+    private final float learningRate = 0.10f;
+    private final float maxAbsWeight = 2.5f;
 
-    private final float learningRate;
-    private final float maxAbsWeight;
-
-    public RewardAdapter(Context context, int hiddenSize, int vocabSize, int rank) {
-        this.hiddenSize = hiddenSize;
+    public RewardAdapter(Context context, int vocabSize, int rank) {
         this.vocabSize = vocabSize;
         this.rank = rank;
-        this.learningRate = 0.10f;
-        this.maxAbsWeight = 2.5f;
-        this.projection = makeProjection(hiddenSize, rank);
         this.weights = new float[rank * vocabSize];
         this.saveFile = new File(context.getFilesDir(), FILE_NAME);
         loadIfCompatible();
     }
 
-    public synchronized void addToLogits(float[] logits, float[] hidden) {
-        float[] z = project(hidden);
+    public synchronized void addToLogits(float[] logits, List<Integer> contextIds) {
+        float[] z = contextFeatures(contextIds);
         for (int v = 0; v < vocabSize; v++) {
             float delta = 0f;
-            for (int r = 0; r < rank; r++) {
-                delta += z[r] * weights[r * vocabSize + v];
+            int offset = v;
+            for (int r = 0; r < rank; r++, offset += vocabSize) {
+                delta += z[r] * weights[offset];
             }
             logits[v] += delta;
         }
     }
 
-    public synchronized float reinforce(float[] baseLogits, float[] hidden, int targetId,
+    public synchronized float reinforce(float[] baseLogits, List<Integer> contextIds, int targetId,
                                         float reward, int policyTopK) {
         if (targetId < 0 || targetId >= vocabSize || reward == 0f) return 0f;
-        float[] z = project(hidden);
+        float[] z = contextFeatures(contextIds);
         int k = Math.max(2, Math.min(policyTopK, vocabSize));
         int[] ids = topKWithTarget(baseLogits, z, targetId, k);
         float[] scores = new float[ids.length];
@@ -62,7 +57,10 @@ public final class RewardAdapter {
         for (int i = 0; i < ids.length; i++) {
             int id = ids[i];
             float s = baseLogits[id];
-            for (int r = 0; r < rank; r++) s += z[r] * weights[r * vocabSize + id];
+            int offset = id;
+            for (int r = 0; r < rank; r++, offset += vocabSize) {
+                s += z[r] * weights[offset];
+            }
             scores[i] = s;
             if (s > max) max = s;
         }
@@ -81,12 +79,12 @@ public final class RewardAdapter {
             if (id == targetId) targetProb = p;
             float advantage = ((id == targetId) ? 1f : 0f) - p;
             float coeff = learningRate * reward * advantage;
-            for (int r = 0; r < rank; r++) {
-                int idx = r * vocabSize + id;
-                float w = weights[idx] + coeff * z[r];
+            int offset = id;
+            for (int r = 0; r < rank; r++, offset += vocabSize) {
+                float w = weights[offset] + coeff * z[r];
                 if (w > maxAbsWeight) w = maxAbsWeight;
                 else if (w < -maxAbsWeight) w = -maxAbsWeight;
-                weights[idx] = w;
+                weights[offset] = w;
             }
         }
         return targetProb;
@@ -97,7 +95,6 @@ public final class RewardAdapter {
         try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(tmp)))) {
             out.writeInt(MAGIC);
             out.writeInt(VERSION);
-            out.writeInt(hiddenSize);
             out.writeInt(vocabSize);
             out.writeInt(rank);
             out.writeInt(weights.length);
@@ -111,11 +108,6 @@ public final class RewardAdapter {
         }
     }
 
-    public synchronized void reset() {
-        Arrays.fill(weights, 0f);
-        if (saveFile.exists()) saveFile.delete();
-    }
-
     public synchronized long nonZeroWeightCount() {
         long count = 0;
         for (float w : weights) if (Math.abs(w) > 1e-8f) count++;
@@ -127,11 +119,10 @@ public final class RewardAdapter {
         try (DataInputStream in = new DataInputStream(new BufferedInputStream(new FileInputStream(saveFile)))) {
             int magic = in.readInt();
             int version = in.readInt();
-            int h = in.readInt();
             int v = in.readInt();
             int r = in.readInt();
             int n = in.readInt();
-            if (magic != MAGIC || version != VERSION || h != hiddenSize || v != vocabSize || r != rank || n != weights.length) {
+            if (magic != MAGIC || version != VERSION || v != vocabSize || r != rank || n != weights.length) {
                 return;
             }
             for (int i = 0; i < weights.length; i++) weights[i] = in.readFloat();
@@ -140,13 +131,26 @@ public final class RewardAdapter {
         }
     }
 
-    private float[] project(float[] hidden) {
+    private float[] contextFeatures(List<Integer> contextIds) {
         float[] z = new float[rank];
-        for (int h = 0; h < hiddenSize; h++) {
-            float x = hidden[h];
-            int base = h * rank;
-            for (int r = 0; r < rank; r++) z[r] += x * projection[base + r];
+        if (contextIds == null || contextIds.isEmpty()) {
+            z[0] = 1f;
+            return z;
         }
+
+        int start = Math.max(0, contextIds.size() - CONTEXT_TOKENS);
+        int count = contextIds.size() - start;
+        for (int i = start; i < contextIds.size(); i++) {
+            int token = contextIds.get(i);
+            int relative = i - start;
+            float recency = 0.30f + 0.70f * ((relative + 1f) / count);
+            long base = mix64(((long) token << 32) ^ (relative * 0x9E3779B97F4A7C15L));
+            for (int r = 0; r < rank; r++) {
+                long h = mix64(base + r * 0xD1B54A32D192ED03L);
+                z[r] += ((h & 1L) == 0L ? recency : -recency);
+            }
+        }
+
         float norm = 1e-6f;
         for (float x : z) norm += x * x;
         norm = (float) Math.sqrt(norm);
@@ -162,7 +166,10 @@ public final class RewardAdapter {
 
         for (int v = 0; v < vocabSize; v++) {
             float s = baseLogits[v];
-            for (int r = 0; r < rank; r++) s += z[r] * weights[r * vocabSize + v];
+            int offset = v;
+            for (int r = 0; r < rank; r++, offset += vocabSize) {
+                s += z[r] * weights[offset];
+            }
             if (s <= vals[k - 1]) continue;
             int pos = k - 1;
             while (pos > 0 && s > vals[pos - 1]) {
@@ -180,11 +187,9 @@ public final class RewardAdapter {
         return ids;
     }
 
-    private static float[] makeProjection(int hiddenSize, int rank) {
-        float[] p = new float[hiddenSize * rank];
-        Random rnd = new Random(0xA2A62026L + hiddenSize * 31L + rank);
-        float scale = (float) (1.0 / Math.sqrt(hiddenSize));
-        for (int i = 0; i < p.length; i++) p[i] = (float) rnd.nextGaussian() * scale;
-        return p;
+    private static long mix64(long z) {
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
     }
 }
