@@ -28,7 +28,7 @@ jobs:
         run: |
           rm -rf app/src/main/assets/model
           mkdir -p app/src/main/assets/model
-          python -m onnxruntime_genai.models.builder             -m Qwen/Qwen2.5-0.5B-Instruct             -o app/src/main/assets/model             -p int4             -e cpu             --extra_options hf_remote=false
+          python -m onnxruntime_genai.models.builder             -m Qwen/Qwen2.5-0.5B-Instruct             -o app/src/main/assets/model             -p int4             -e cpu             --extra_options hf_remote=false hf_token=false
 
       - name: Inspect model package
         run: |
