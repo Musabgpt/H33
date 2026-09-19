@@ -10,7 +10,14 @@ ASSETS.mkdir(parents=True, exist_ok=True)
 
 print("Loading", MODEL_ID)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=False)
-model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
+model = AutoModelForCausalLM.from_pretrained(
+    MODEL_ID,
+    attn_implementation="eager",
+)
+# Force the export-friendly attention path. Recent Transformers may otherwise
+# route tracing through SDPA/flex-attention internals that are not export-safe.
+if hasattr(model.config, "_attn_implementation"):
+    model.config._attn_implementation = "eager"
 model.eval()
 
 class LastTokenWithHidden(torch.nn.Module):
