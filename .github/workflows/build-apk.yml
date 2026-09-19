@@ -21,7 +21,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1"
-          pip install "transformers==4.55.4" "safetensors>=0.5" "onnx>=1.17" "onnxruntime>=1.24,<2" "numpy<3" sentencepiece
+          pip install "transformers==4.55.4" "optimum-onnx" "safetensors>=0.5" "onnx>=1.17" "onnxruntime>=1.24,<2" "numpy<3" sentencepiece
 
       - name: Export AraGPT2 with hidden-state output and quantize
         run: python scripts/export_aragpt2_onnx.py
