@@ -17,13 +17,25 @@
 تدريب جميع أوزان AraGPT2 (135M) مباشرة على CPU الهاتف بعد كل جواب مكلف جدًا في RAM والحرارة والوقت. لذلك التطبيق يستخدم تصميمًا عمليًا:
 
 - AraGPT2 الأساسي يعمل كـ **INT8 frozen backbone**.
-- ملف ONNX يرجع next-token logits بالإضافة إلى last hidden state.
-- فوقه يوجد **low-rank Reward Adapter** برتبة 8، بحوالي نصف مليون وزن قابل للتعلّم (قرابة 2 MB).
+- النموذج يصدر رسميًا عبر Hugging Face Optimum ONNX ويعيد logits لكل token.
+- فوقه يوجد **context-aware Reward Adapter** برتبة 8، بحوالي 512 ألف وزن قابل للتعلّم (قرابة 2 MB).
+- سياق الـAdapter يُشتق من آخر tokens في السؤال/السياق بواسطة features حتمية صغيرة، لذلك التحديث مرتبط بالسياق وليس مجرد bias عام.
 - التحديث هو REINFORCE-style policy update على top-k: التقييم الصحيح يزيد احتمال tokens التي وافقت عليها، والتقييم السلبي يخفضها، والتصحيح يقوي tokens الجواب الذي كتبته.
-- أوزان الـAdapter تحفظ في `reward_adapter_v1.bin` داخل مساحة التطبيق وتعود تلقائيًا بعد إغلاق/فتح التطبيق.
+- أوزان الـAdapter تحفظ في `reward_adapter_v2.bin` داخل مساحة التطبيق وتعود تلقائيًا بعد إغلاق/فتح التطبيق.
 - feedback يحفظ محليًا في `feedback.jsonl` ولا يرسل إلى أي خادم.
 
 **مهم:** هذه ليست PPO كاملة ولا تعيد تدريب الـ135M بارامتر الأساسي. الذي يتغير فعليًا هو أوزان الـReward Adapter المتصلة مباشرةً بالـlogits، وهذا مقصود حتى يكون التعلم الفوري ممكنًا على الهاتف.
+
+## حالة البناء
+تم التحقق من المسار كاملًا عبر GitHub Actions:
+- تصدير AraGPT2 إلى ONNX: ناجح.
+- Quantization إلى INT8: ناجح.
+- ONNX smoke test: ناجح.
+- Android SDK / Java / Gradle: ناجح.
+- `assembleDebug`: ناجح.
+- رفع APK كـ artifact: ناجح.
+
+حجم نموذج INT8 الناتج في آخر build كان قرابة **320 MB**.
 
 ## بناء APK من GitHub Actions
 1. افتح تبويب **Actions**.
@@ -31,11 +43,11 @@
 3. اضغط **Run workflow**.
 4. عند النجاح نزّل artifact باسم `AraGPT2-Android-APK`.
 
-الـworkflow ينزّل AraGPT2 من Hugging Face، يصدره إلى ONNX، يحاول quantization إلى INT8، يشغّل smoke test، ثم يبني APK. أوزان النموذج الكبيرة لا تُرفع إلى GitHub.
+البناء صار **يدويًا عند الطلب** بدل أن يعمل عند كل commit، لأن تصدير النموذج الكبير في كل تعديل غير ضروري.
 
 ## تفاصيل تقنية
 - Android ARM64 فقط.
-- `minSdk=28`, `targetSdk=37`.
+- `minSdk=28`, `targetSdk=36`, `compileSdk=36`.
 - ONNX Runtime Android 1.30.0.
 - سياق التطبيق 192 token لتقليل الضغط على الهاتف.
 - حد التدريب لكل تصحيح 48 token حتى لا يبقى الهاتف في تحديث طويل.
