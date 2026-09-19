@@ -38,22 +38,22 @@ public final class QwenEngine implements AutoCloseable {
         }
     }
 
-    private static final String SYSTEM_PROMPT =
-            "أنت مساعد عربي محلي. أجب مباشرة وبوضوح وبقدر السؤال. " +
-            "لا ترفض سؤالاً عادياً لمجرد الحذر الزائد. إذا لم تعرف الإجابة فقل إنك لا تعرف، " +
-            "ولا تختلق معلومات. استخدم العربية ما لم يطلب المستخدم لغة أخرى.";
+    private static final String FALLBACK_SYSTEM_PROMPT =
+            "أنت H33، مساعد محلي مبني على Qwen2.5. أجب مباشرة وبدقة، لا تخمّن، " +
+            "واستخدم نتائج الويب المعطاة لك عندما تكون موجودة.";
 
     private static final String MODEL_ASSET_DIR = "model";
     private static final String MODEL_LOCAL_DIR = "qwen2_5_0_5b_int4";
     private static final String CHAT_FILE = "current_chat.jsonl";
     private static final int MAX_HISTORY_MESSAGES = 12;
-    private static final int MAX_PROMPT_TOKENS = 1400;
+    private static final int MAX_PROMPT_TOKENS = 1150;
 
     private final Context context;
     private final CorrectionMemory memory;
     private final Model model;
     private final Tokenizer tokenizer;
     private final File chatFile;
+    private final String fablePrompt;
     private final ArrayList<ChatTurn> conversation = new ArrayList<>();
 
     private volatile boolean cancelRequested = false;
@@ -62,6 +62,8 @@ public final class QwenEngine implements AutoCloseable {
         this.context = context.getApplicationContext();
         this.memory = new CorrectionMemory(this.context);
         this.chatFile = new File(this.context.getFilesDir(), CHAT_FILE);
+        this.fablePrompt = readTextAsset(this.context.getAssets(), "fable_for_qwen_v1.txt",
+                FALLBACK_SYSTEM_PROMPT);
 
         File modelDir = new File(this.context.getFilesDir(), MODEL_LOCAL_DIR);
         prepareModelDirectory(this.context.getAssets(), MODEL_ASSET_DIR, modelDir);
@@ -71,7 +73,8 @@ public final class QwenEngine implements AutoCloseable {
         loadConversation();
     }
 
-    public String generateStream(String question, int maxNewTokens, StreamListener listener) throws Exception {
+    public String generateStream(String question, int maxNewTokens, String webContext,
+                                 StreamListener listener) throws Exception {
         String q = question == null ? "" : question.trim();
         if (q.isEmpty()) return "";
 
@@ -94,20 +97,20 @@ public final class QwenEngine implements AutoCloseable {
             snapshot = new ArrayList<>(conversation);
         }
 
-        String prompt = buildPrompt(snapshot, q);
+        String prompt = buildPrompt(snapshot, q, webContext);
         StringBuilder raw = new StringBuilder();
 
-        try (Sequences encoded = encodeTrimmedPrompt(prompt, snapshot, q)) {
+        try (Sequences encoded = encodeTrimmedPrompt(prompt, snapshot, q, webContext)) {
             int[] inputIds = encoded.getSequence(0);
             int totalMaxLength = Math.min(2048, inputIds.length + Math.max(8, maxNewTokens));
 
             try (GeneratorParams params = new GeneratorParams(model)) {
                 params.setSearchOption("max_length", (double) totalMaxLength);
                 params.setSearchOption("do_sample", true);
-                params.setSearchOption("temperature", 0.65);
-                params.setSearchOption("top_k", 40.0);
-                params.setSearchOption("top_p", 0.90);
-                params.setSearchOption("repetition_penalty", 1.08);
+                params.setSearchOption("temperature", 0.70);
+                params.setSearchOption("top_k", 20.0);
+                params.setSearchOption("top_p", 0.80);
+                params.setSearchOption("repetition_penalty", 1.10);
 
                 try (Generator generator = new Generator(model, params);
                      TokenizerStream stream = tokenizer.createStream()) {
@@ -193,7 +196,8 @@ public final class QwenEngine implements AutoCloseable {
         }
     }
 
-    private Sequences encodeTrimmedPrompt(String initialPrompt, List<ChatTurn> snapshot, String question)
+    private Sequences encodeTrimmedPrompt(String initialPrompt, List<ChatTurn> snapshot,
+                                           String question, String webContext)
             throws Exception {
         Sequences encoded = tokenizer.encode(initialPrompt);
         if (encoded.getSequence(0).length <= MAX_PROMPT_TOKENS) return encoded;
@@ -209,7 +213,7 @@ public final class QwenEngine implements AutoCloseable {
                 recent.clear();
             }
 
-            String prompt = buildPrompt(recent, question);
+            String prompt = buildPrompt(recent, question, webContext);
             Sequences attempt = tokenizer.encode(prompt);
             if (attempt.getSequence(0).length <= MAX_PROMPT_TOKENS || recent.isEmpty()) {
                 return attempt;
@@ -217,16 +221,24 @@ public final class QwenEngine implements AutoCloseable {
             attempt.close();
         }
 
-        return tokenizer.encode(buildPrompt(Collections.emptyList(), question));
+        return tokenizer.encode(buildPrompt(Collections.emptyList(), question, webContext));
     }
 
-    private String buildPrompt(List<ChatTurn> history, String question) {
+    private String buildPrompt(List<ChatTurn> history, String question, String webContext) {
         StringBuilder p = new StringBuilder();
         p.append("<|im_start|>system\n")
-                .append(SYSTEM_PROMPT)
+                .append(fablePrompt)
                 .append("<|im_end|>\n");
 
-        List<CorrectionMemory.Entry> examples = memory.bestExamples(question, 2);
+        if (webContext != null && !webContext.trim().isEmpty()) {
+            p.append("<|im_start|>system\n")
+                    .append("WEB_RESULTS حديثة. استخدم فقط ما يفيد السؤال، ولا تختلق مصادر. ")
+                    .append("عند الاستشهاد استخدم [رقم النتيجة].\n")
+                    .append(webContext.trim())
+                    .append("<|im_end|>\n");
+        }
+
+        List<CorrectionMemory.Entry> examples = memory.bestExamples(question, 1);
         for (CorrectionMemory.Entry e : examples) {
             p.append("<|im_start|>user\n")
                     .append(e.question)
@@ -323,6 +335,22 @@ public final class QwenEngine implements AutoCloseable {
         marker = out.indexOf("<|endoftext|>");
         if (marker >= 0) out = out.substring(0, marker);
         return out.trim();
+    }
+
+    private static String readTextAsset(AssetManager assets, String name, String fallback) {
+        try (InputStream in = assets.open(name);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            StringBuilder out = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                out.append(line).append('\n');
+                if (out.length() > 6000) break;
+            }
+            String value = out.toString().trim();
+            return value.isEmpty() ? fallback : value;
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     private static void prepareModelDirectory(AssetManager assets, String assetPath, File target)
