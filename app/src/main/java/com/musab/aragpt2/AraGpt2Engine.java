@@ -33,29 +33,29 @@ public final class AraGpt2Engine implements AutoCloseable {
 
     private RewardAdapter adapter;
 
-    private static final class StepOutput {
-        final float[] logits;
-        final float[] hidden;
-        StepOutput(float[] logits, float[] hidden) {
-            this.logits = logits;
-            this.hidden = hidden;
-        }
-    }
-
     public AraGpt2Engine(Context context) throws Exception {
         this.context = context.getApplicationContext();
         this.feedbackStore = new FeedbackStore(this.context);
         tokenizer = new Gpt2Tokenizer(this.context);
+
         String modelAsset = findModelAsset(this.context.getAssets());
         if (modelAsset == null) {
             throw new IllegalStateException("ملف النموذج غير موجود. ابنِ APK من GitHub Actions حتى يتم تضمين AraGPT2.");
         }
+
         File modelFile = ensureAssetCopied(this.context, modelAsset);
         env = OrtEnvironment.getEnvironment();
+
         OrtSession.SessionOptions options = new OrtSession.SessionOptions();
         options.setIntraOpNumThreads(Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())));
         options.setInterOpNumThreads(1);
         session = env.createSession(modelFile.getAbsolutePath(), options);
+
+        for (String input : session.getInputNames()) {
+            if (input.contains("past_key_values") || input.startsWith("past.")) {
+                throw new IllegalStateException("تم تصدير نموذج ONNX مع KV-cache إلزامي. يجب استخدام monolith بدون past inputs.");
+            }
+        }
     }
 
     public String generate(String question, int maxNewTokens, float temperature, int topK) throws Exception {
@@ -66,13 +66,16 @@ public final class AraGpt2Engine implements AutoCloseable {
 
         List<Integer> generated = new ArrayList<>();
         for (int step = 0; step < maxNewTokens && ids.size() < MAX_CONTEXT; step++) {
-            StepOutput out = runBase(ids);
-            ensureAdapter(out);
-            adapter.addToLogits(out.logits, out.hidden);
-            int next = sampleTopK(out.logits, temperature, topK);
+            float[] logits = runBase(ids);
+            ensureAdapter(logits);
+            adapter.addToLogits(logits, ids);
+
+            int next = sampleTopK(logits, temperature, topK);
             if (next == EOS_ID) break;
+
             ids.add(next);
             generated.add(next);
+
             if (generated.size() >= 2) {
                 String partial = tokenizer.decode(generated);
                 if (partial.contains("\nسؤال:") || partial.contains("\n\n")) break;
@@ -94,7 +97,8 @@ public final class AraGpt2Engine implements AutoCloseable {
         }
         int up = trainAnswer(question, correction, +1.0f, 2);
         feedbackStore.append(question, wrongAnswer, correction, +1.0f);
-        return "تم التعلم: " + up + " خطوة للتصحيح" + (down > 0 ? " و" + down + " خطوة لتقليل الجواب الخاطئ" : "");
+        return "تم التعلم: " + up + " خطوة للتصحيح" +
+                (down > 0 ? " و" + down + " خطوة لتقليل الجواب الخاطئ" : "");
     }
 
     public long learnedWeightCount() {
@@ -103,78 +107,137 @@ public final class AraGpt2Engine implements AutoCloseable {
 
     private int trainAnswer(String question, String answer, float reward, int epochs) throws Exception {
         if (answer == null || answer.trim().isEmpty()) return 0;
+
         List<Integer> prompt = new ArrayList<>(tokenizer.encode(formatPrompt(question)));
         List<Integer> targets = new ArrayList<>(tokenizer.encode(answer.trim()));
         if (targets.isEmpty()) return 0;
-        if (targets.size() > MAX_TRAIN_TOKENS) targets = new ArrayList<>(targets.subList(0, MAX_TRAIN_TOKENS));
+        if (targets.size() > MAX_TRAIN_TOKENS) {
+            targets = new ArrayList<>(targets.subList(0, MAX_TRAIN_TOKENS));
+        }
 
         int steps = 0;
         for (int epoch = 0; epoch < epochs; epoch++) {
             List<Integer> contextIds = new ArrayList<>(prompt);
             trimLeft(contextIds, MAX_CONTEXT);
+
             for (int target : targets) {
-                StepOutput out = runBase(contextIds);
-                ensureAdapter(out);
-                adapter.reinforce(out.logits, out.hidden, target, reward, POLICY_TOP_K);
+                float[] logits = runBase(contextIds);
+                ensureAdapter(logits);
+                adapter.reinforce(logits, contextIds, target, reward, POLICY_TOP_K);
+
                 contextIds.add(target);
                 trimLeft(contextIds, MAX_CONTEXT);
                 steps++;
             }
         }
+
         if (adapter != null) adapter.save();
         return steps;
     }
 
-    private void ensureAdapter(StepOutput out) {
+    private void ensureAdapter(float[] logits) {
         if (adapter == null) {
-            adapter = new RewardAdapter(context, out.hidden.length, out.logits.length, ADAPTER_RANK);
+            adapter = new RewardAdapter(context, logits.length, ADAPTER_RANK);
         }
     }
 
-    private StepOutput runBase(List<Integer> ids) throws Exception {
+    private float[] runBase(List<Integer> ids) throws Exception {
         if (ids.isEmpty()) throw new IllegalArgumentException("السياق فارغ");
+
         long[] shape = new long[]{1, ids.size()};
         long[] input = new long[ids.size()];
         long[] mask = new long[ids.size()];
+        long[] positions = new long[ids.size()];
+
         for (int i = 0; i < ids.size(); i++) {
             input[i] = ids.get(i);
             mask[i] = 1L;
+            positions[i] = i;
         }
 
-        try (OnnxTensor inputIds = OnnxTensor.createTensor(env, LongBuffer.wrap(input), shape);
-             OnnxTensor attentionMask = OnnxTensor.createTensor(env, LongBuffer.wrap(mask), shape)) {
-            Map<String, OnnxTensor> feed = new HashMap<>();
-            feed.put("input_ids", inputIds);
-            feed.put("attention_mask", attentionMask);
+        Map<String, OnnxTensor> feed = new HashMap<>();
+        List<OnnxTensor> tensors = new ArrayList<>();
+        try {
+            if (session.getInputNames().contains("input_ids")) {
+                OnnxTensor t = OnnxTensor.createTensor(env, LongBuffer.wrap(input), shape);
+                feed.put("input_ids", t);
+                tensors.add(t);
+            }
+            if (session.getInputNames().contains("attention_mask")) {
+                OnnxTensor t = OnnxTensor.createTensor(env, LongBuffer.wrap(mask), shape);
+                feed.put("attention_mask", t);
+                tensors.add(t);
+            }
+            if (session.getInputNames().contains("position_ids")) {
+                OnnxTensor t = OnnxTensor.createTensor(env, LongBuffer.wrap(positions), shape);
+                feed.put("position_ids", t);
+                tensors.add(t);
+            }
+            if (session.getInputNames().contains("token_type_ids")) {
+                long[] zeros = new long[ids.size()];
+                OnnxTensor t = OnnxTensor.createTensor(env, LongBuffer.wrap(zeros), shape);
+                feed.put("token_type_ids", t);
+                tensors.add(t);
+            }
+
+            if (!feed.containsKey("input_ids")) {
+                throw new IllegalStateException("ONNX لا يحتوي input_ids");
+            }
+
             try (OrtSession.Result result = session.run(feed)) {
-                float[] logits = flatten2d(result.get(0).getValue(), "logits");
-                float[] hidden = flatten2d(result.get(1).getValue(), "hidden");
-                return new StepOutput(logits, hidden);
+                Object value = result.get(0).getValue();
+                return extractLastLogits(value);
+            }
+        } finally {
+            for (OnnxTensor t : tensors) {
+                try { t.close(); } catch (Exception ignored) {}
             }
         }
     }
 
-    private static float[] flatten2d(Object value, String name) {
-        if (value instanceof float[][]) return ((float[][]) value)[0].clone();
-        if (value instanceof float[]) return ((float[]) value).clone();
-        throw new IllegalStateException("Unexpected ONNX output for " + name + ": " + value.getClass());
+    private static float[] extractLastLogits(Object value) {
+        if (value instanceof float[][][]) {
+            float[][][] v = (float[][][]) value;
+            if (v.length == 0 || v[0].length == 0) {
+                throw new IllegalStateException("مخرجات logits فارغة");
+            }
+            return v[0][v[0].length - 1].clone();
+        }
+        if (value instanceof float[][]) {
+            float[][] v = (float[][]) value;
+            if (v.length == 0) throw new IllegalStateException("مخرجات logits فارغة");
+            return v[v.length - 1].clone();
+        }
+        if (value instanceof float[]) {
+            return ((float[]) value).clone();
+        }
+        throw new IllegalStateException("شكل logits غير متوقع: " + value.getClass());
     }
 
     private int sampleTopK(float[] logits, float temperature, int topK) {
         int k = Math.max(1, Math.min(topK, logits.length));
         int[] idx = new int[k];
         float[] vals = new float[k];
-        for (int i = 0; i < k; i++) { idx[i] = -1; vals[i] = -Float.MAX_VALUE; }
+        for (int i = 0; i < k; i++) {
+            idx[i] = -1;
+            vals[i] = -Float.MAX_VALUE;
+        }
+
         for (int i = 0; i < logits.length; i++) {
             float v = logits[i];
             if (v <= vals[k - 1]) continue;
             int pos = k - 1;
             while (pos > 0 && v > vals[pos - 1]) {
-                vals[pos] = vals[pos - 1]; idx[pos] = idx[pos - 1]; pos--;
+                vals[pos] = vals[pos - 1];
+                idx[pos] = idx[pos - 1];
+                pos--;
             }
-            vals[pos] = v; idx[pos] = i;
+            vals[pos] = v;
+            idx[pos] = i;
         }
+
         if (temperature <= 0.01f) return idx[0];
+
         float max = vals[0] / temperature;
         double sum = 0.0;
         double[] probs = new double[k];
@@ -182,6 +245,7 @@ public final class AraGpt2Engine implements AutoCloseable {
             probs[i] = Math.exp((vals[i] / temperature) - max);
             sum += probs[i];
         }
+
         double r = random.nextDouble() * sum;
         for (int i = 0; i < k; i++) {
             r -= probs[i];
@@ -210,7 +274,8 @@ public final class AraGpt2Engine implements AutoCloseable {
 
     private static File ensureAssetCopied(Context context, String assetName) throws Exception {
         File dst = new File(context.getFilesDir(), assetName);
-        if (dst.exists() && dst.length() > 1024 * 1024) return dst;
+        if (dst.exists() && dst.length() > 50L * 1024L * 1024L) return dst;
+
         try (InputStream in = context.getAssets().open(assetName);
              FileOutputStream out = new FileOutputStream(dst)) {
             byte[] buf = new byte[1024 * 1024];
@@ -220,8 +285,8 @@ public final class AraGpt2Engine implements AutoCloseable {
         return dst;
     }
 
-    @Override public void close() throws Exception {
+    @Override
+    public void close() throws Exception {
         session.close();
-        env.close();
     }
 }
