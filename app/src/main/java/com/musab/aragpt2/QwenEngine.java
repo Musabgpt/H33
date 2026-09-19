@@ -266,6 +266,12 @@ public final class QwenEngine implements AutoCloseable {
                 JSONArray messages = new JSONArray();
 
                 StringBuilder system = new StringBuilder(fablePrompt);
+
+                String sessionContext = buildRecentSessionContext(history);
+                if (!sessionContext.isEmpty()) {
+                    system.append("\n\n").append(sessionContext);
+                }
+
                 if (webContext != null && !webContext.trim().isEmpty()) {
                     system.append("\n\nWEB_RESULTS حديثة. استخدم فقط ما يفيد السؤال، ")
                             .append("ولا تختلق مصادر. عند الاستشهاد استخدم [رقم النتيجة].\n")
@@ -306,8 +312,15 @@ public final class QwenEngine implements AutoCloseable {
 
     private String buildPromptFallback(List<ChatTurn> history, String question, String webContext) {
         StringBuilder p = new StringBuilder();
+
+        String fallbackSystem = fablePrompt;
+        String sessionContext = buildRecentSessionContext(history);
+        if (!sessionContext.isEmpty()) {
+            fallbackSystem += "\n\n" + sessionContext;
+        }
+
         p.append("<|im_start|>system\n")
-                .append(fablePrompt)
+                .append(fallbackSystem)
                 .append("<|im_end|>\n");
 
         if (webContext != null && !webContext.trim().isEmpty()) {
@@ -354,6 +367,29 @@ public final class QwenEngine implements AutoCloseable {
         obj.put("role", role);
         obj.put("content", content == null ? "" : content);
         messages.put(obj);
+    }
+
+    private String buildRecentSessionContext(List<ChatTurn> history) {
+        if (history == null || history.isEmpty()) return "";
+
+        int start = Math.max(0, history.size() - 4);
+        StringBuilder out = new StringBuilder();
+        out.append("SESSION_CONTEXT من نفس المحادثة. هذا السياق موثوق. ")
+                .append("إذا أشار المستخدم إلى شيء قاله أو قلته قبل قليل، استخدمه مباشرة ولا تدّعِ أنه غير موجود.\n");
+
+        for (int i = start; i < history.size(); i++) {
+            ChatTurn turn = history.get(i);
+            if (!"user".equals(turn.role) && !"assistant".equals(turn.role)) continue;
+
+            String text = turn.content == null ? "" : turn.content.trim();
+            if (text.length() > 360) text = text.substring(0, 360) + "…";
+
+            out.append("user".equals(turn.role) ? "المستخدم سابقًا: " : "المساعد سابقًا: ")
+                    .append(text)
+                    .append("\n");
+        }
+
+        return out.toString().trim();
     }
 
     private void trimConversationInMemory() {
