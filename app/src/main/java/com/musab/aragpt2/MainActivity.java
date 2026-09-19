@@ -230,24 +230,59 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                String webContext = "";
                 boolean searched = explicitWebSearch || WebSearchClient.shouldAutoSearch(question);
+                WebSearchClient.WebPayload webPayload = null;
 
                 if (searched) {
-                    runOnUiThread(() -> status.setText("🌐 يبحث في الإنترنت…"));
-                    try {
-                        webContext = WebSearchClient.search(question, 5);
-                    } catch (Exception searchError) {
-                        runOnUiThread(() ->
-                                status.setText("تعذر بحث الويب؛ سأكمل من المعرفة المحلية"));
-                    }
-                }
+                    runOnUiThread(() -> status.setText(
+                            WebSearchClient.containsUrl(question)
+                                    ? "🌐 يفتح الرابط ويقرأ الصفحة…"
+                                    : "🌐 يبحث في الإنترنت…"
+                    ));
 
-                if (searched && !webContext.isEmpty()) {
-                    runOnUiThread(() -> status.setText("🌐 Qwen يقرأ نتائج البحث…"));
+                    try {
+                        webPayload = WebSearchClient.resolve(question, 5);
+                    } catch (Exception searchError) {
+                        webPayload = null;
+                    }
+
+                    if (webPayload == null || !webPayload.isUsable()) {
+                        runOnUiThread(() -> {
+                            if (myGeneration != generationId) return;
+                            assistantBubble.setText(
+                                    "🌐 تعذر الوصول إلى الويب أو لم أجد نتائج صالحة. " +
+                                    "لن أعطيك جواباً من الذاكرة وكأنه نتيجة بحث."
+                            );
+                            setBusy(false, "تعذر بحث الويب");
+                            scrollToBottom();
+                        });
+                        return;
+                    }
+
+                    final WebSearchClient.WebPayload shownPayload = webPayload;
+                    runOnUiThread(() -> {
+                        if (myGeneration != generationId) return;
+                        addWebBadge(
+                                assistantBlock,
+                                shownPayload.sourceCount,
+                                shownPayload.directUrl
+                        );
+                        status.setText(
+                                shownPayload.directUrl
+                                        ? "🌐 تم فتح الصفحة • Qwen يلخّص المحتوى"
+                                        : "🌐 تم العثور على " + shownPayload.sourceCount + " مصادر • Qwen يقرأها"
+                        );
+                    });
                 } else {
                     runOnUiThread(() -> status.setText("Qwen يكتب…"));
                 }
+
+                final String webContext =
+                        (webPayload == null) ? "" : webPayload.context;
+                final String webSources =
+                        (webPayload == null) ? "" : webPayload.sources;
+                final boolean usedWeb =
+                        webPayload != null && webPayload.isUsable();
 
                 final long[] lastUiUpdate = {0L};
                 String answer = engine.generateStream(question, 128, webContext, fullText -> {
@@ -280,7 +315,7 @@ public class MainActivity extends AppCompatActivity {
 
                 final String finalAnswer = answer == null ? "" : answer.trim();
                 final String finalSavedPath = savedPath;
-                final boolean usedWeb = searched && !webContext.isEmpty();
+                final String finalWebSources = webSources;
 
                 runOnUiThread(() -> {
                     if (myGeneration != generationId) return;
@@ -288,13 +323,17 @@ public class MainActivity extends AppCompatActivity {
                     if (finalAnswer.isEmpty()) {
                         assistantBubble.setText("تم إيقاف التوليد.");
                     } else {
-                        assistantBubble.setText(finalAnswer);
-                        lastAssistantAnswer = finalAnswer;
-                        addAssistantActions(assistantBlock, assistantBubble, question, finalAnswer);
+                        String displayAnswer = finalAnswer;
+                        if (usedWeb && !finalWebSources.isEmpty()) {
+                            displayAnswer += "\n\n🌐 المصادر\n" + finalWebSources;
+                        }
+                        assistantBubble.setText(displayAnswer);
+                        lastAssistantAnswer = displayAnswer;
+                        addAssistantActions(assistantBlock, assistantBubble, question, displayAnswer);
                     }
 
                     String msg = "جاهز • Fable v1";
-                    if (usedWeb) msg += " • 🌐 بحث ويب";
+                    if (usedWeb) msg += " • 🌐 بحث ويب فعلي";
                     if (!finalSavedPath.isEmpty()) msg += " • 💾 " + finalSavedPath;
                     setBusy(false, msg);
                     scrollToBottom();
@@ -307,6 +346,36 @@ public class MainActivity extends AppCompatActivity {
                 });
             }
         });
+    }
+
+    private void addWebBadge(LinearLayout block, int sourceCount, boolean directUrl) {
+        TextView badge = new TextView(this);
+        badge.setText(
+                directUrl
+                        ? "🌐 صفحة ويب مقروءة مباشرة"
+                        : "🌐 بحث ويب حقيقي • " + sourceCount + " مصادر"
+        );
+        badge.setTextSize(12f);
+        badge.setAlpha(0.80f);
+        badge.setPadding(dp(8), dp(4), dp(8), dp(4));
+
+        boolean night = (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(night ? Color.rgb(30, 70, 55) : Color.rgb(225, 247, 237));
+        bg.setCornerRadius(dp(12));
+        badge.setBackground(bg);
+        badge.setTextColor(night ? Color.rgb(210, 255, 235) : Color.rgb(20, 90, 60));
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        lp.setMargins(dp(4), 0, dp(4), dp(5));
+        badge.setLayoutParams(lp);
+
+        block.addView(badge, 0);
     }
 
     private void stopGeneration() {
