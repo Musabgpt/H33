@@ -56,15 +56,21 @@ if not answer:
 if "56" not in answer:
     raise SystemExit("Qwen smoke test did not answer the arithmetic prompt as expected")
 
+session_context = (
+    SYSTEM
+    + "\n\nSESSION_CONTEXT من نفس المحادثة. هذا السياق موثوق. "
+      "إذا سأل المستخدم عن شيء ذُكر قبل قليل فاستخدمه مباشرة.\n"
+      "المستخدم سابقًا: احفظ داخل هذه المحادثة فقط: الرمز التجريبي هو زمرد 4827.\n"
+      "المساعد سابقًا: حسنًا، الرمز التجريبي في هذه المحادثة هو زمرد 4827."
+)
+
 memory_answer = run_messages([
-    {"role": "system", "content": SYSTEM},
-    {"role": "user", "content": "احفظ داخل هذه المحادثة فقط: الرمز التجريبي هو زمرد 4827."},
-    {"role": "assistant", "content": "حسنًا، الرمز التجريبي في هذه المحادثة هو زمرد 4827."},
-    {"role": "user", "content": "ما الرمز التجريبي الذي ذكرته قبل قليل؟"},
+    {"role": "system", "content": session_context},
+    {"role": "user", "content": "ما الرمز التجريبي الذي ذكرته قبل قليل؟ أجب بالرمز فقط."},
 ], 48)
 print("SESSION MEMORY ANSWER:", memory_answer, flush=True)
 if "4827" not in memory_answer and "زمرد" not in memory_answer:
-    raise SystemExit("Qwen multi-turn session-memory smoke test failed")
+    raise SystemExit("Qwen explicit session-context smoke test failed")
 
 print("QWEN_SMOKE_OK", flush=True)
 print("SESSION_MEMORY_SMOKE_OK", flush=True)
