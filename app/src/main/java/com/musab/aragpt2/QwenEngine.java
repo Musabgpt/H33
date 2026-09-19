@@ -3,6 +3,7 @@ package com.musab.aragpt2;
 import android.content.Context;
 import android.content.res.AssetManager;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import ai.onnxruntime.genai.Generator;
@@ -54,6 +55,7 @@ public final class QwenEngine implements AutoCloseable {
     private final Tokenizer tokenizer;
     private final File chatFile;
     private final String fablePrompt;
+    private final String chatTemplate;
     private final ArrayList<ChatTurn> conversation = new ArrayList<>();
 
     private volatile boolean cancelRequested = false;
@@ -70,6 +72,11 @@ public final class QwenEngine implements AutoCloseable {
 
         this.model = new Model(modelDir.getAbsolutePath());
         this.tokenizer = new Tokenizer(model);
+        this.chatTemplate = readTextAsset(
+                this.context.getAssets(),
+                "model/chat_template.jinja",
+                ""
+        );
         loadConversation();
     }
 
@@ -254,6 +261,50 @@ public final class QwenEngine implements AutoCloseable {
     }
 
     private String buildPrompt(List<ChatTurn> history, String question, String webContext) {
+        if (chatTemplate != null && !chatTemplate.trim().isEmpty()) {
+            try {
+                JSONArray messages = new JSONArray();
+
+                StringBuilder system = new StringBuilder(fablePrompt);
+                if (webContext != null && !webContext.trim().isEmpty()) {
+                    system.append("\n\nWEB_RESULTS حديثة. استخدم فقط ما يفيد السؤال، ")
+                            .append("ولا تختلق مصادر. عند الاستشهاد استخدم [رقم النتيجة].\n")
+                            .append(webContext.trim());
+                }
+                addMessage(messages, "system", system.toString());
+
+                if (webContext == null || webContext.trim().isEmpty()) {
+                    List<CorrectionMemory.Entry> examples = memory.bestExamples(question, 1);
+                    for (CorrectionMemory.Entry e : examples) {
+                        addMessage(messages, "user", e.question);
+                        addMessage(messages, "assistant", e.answer);
+                    }
+                }
+
+                int start = Math.max(0, history.size() - MAX_HISTORY_MESSAGES);
+                for (int i = start; i < history.size(); i++) {
+                    ChatTurn turn = history.get(i);
+                    if (!"user".equals(turn.role) && !"assistant".equals(turn.role)) continue;
+                    addMessage(messages, turn.role, turn.content);
+                }
+
+                addMessage(messages, "user", question);
+
+                return tokenizer.applyChatTemplate(
+                        chatTemplate,
+                        messages.toString(),
+                        null,
+                        true
+                );
+            } catch (Exception ignored) {
+                // Fall through to the conservative manual Qwen ChatML formatter.
+            }
+        }
+
+        return buildPromptFallback(history, question, webContext);
+    }
+
+    private String buildPromptFallback(List<ChatTurn> history, String question, String webContext) {
         StringBuilder p = new StringBuilder();
         p.append("<|im_start|>system\n")
                 .append(fablePrompt)
@@ -296,6 +347,13 @@ public final class QwenEngine implements AutoCloseable {
                 .append("<|im_start|>assistant\n");
 
         return p.toString();
+    }
+
+    private static void addMessage(JSONArray messages, String role, String content) throws Exception {
+        JSONObject obj = new JSONObject();
+        obj.put("role", role);
+        obj.put("content", content == null ? "" : content);
+        messages.put(obj);
     }
 
     private void trimConversationInMemory() {
