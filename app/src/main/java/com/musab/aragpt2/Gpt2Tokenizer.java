@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,7 +33,9 @@ public final class Gpt2Tokenizer {
     public Gpt2Tokenizer(Context context) throws Exception {
         String vocabText = readAsset(context, "vocab.json");
         JSONObject vocab = new JSONObject(vocabText);
-        for (String key : vocab.keySet()) {
+        Iterator<String> vocabKeys = vocab.keys();
+        while (vocabKeys.hasNext()) {
+            String key = vocabKeys.next();
             int id = vocab.getInt(key);
             encoder.put(key, id);
             decoder.put(id, key);
@@ -108,8 +111,10 @@ public final class Gpt2Tokenizer {
                 }
             }
             if (best == null) break;
-            String[] xy = best.split("\\u0001", -1);
-            String first = xy[0], second = xy[1];
+            int separator = best.indexOf('\u0001');
+            if (separator < 0) break;
+            String first = best.substring(0, separator);
+            String second = best.substring(separator + 1);
             ArrayList<String> newWord = new ArrayList<>();
             int i = 0;
             while (i < word.size()) {
