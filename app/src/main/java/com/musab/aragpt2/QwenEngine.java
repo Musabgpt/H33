@@ -45,8 +45,8 @@ public final class QwenEngine implements AutoCloseable {
     private static final String MODEL_ASSET_DIR = "model";
     private static final String MODEL_LOCAL_DIR = "qwen2_5_0_5b_int4";
     private static final String CHAT_FILE = "current_chat.jsonl";
-    private static final int MAX_HISTORY_MESSAGES = 12;
-    private static final int MAX_PROMPT_TOKENS = 1150;
+    private static final int MAX_HISTORY_MESSAGES = 16;
+    private static final int MAX_PROMPT_TOKENS = 1750;
 
     private final Context context;
     private final CorrectionMemory memory;
@@ -99,10 +99,9 @@ public final class QwenEngine implements AutoCloseable {
             snapshot = new ArrayList<>(conversation);
         }
 
-        String prompt = buildPrompt(snapshot, q, webContext);
         StringBuilder raw = new StringBuilder();
 
-        try (Sequences encoded = encodeTrimmedPrompt(prompt, snapshot, q, webContext)) {
+        try (Sequences encoded = encodeTrimmedPrompt(snapshot, q, webContext)) {
             int[] inputIds = encoded.getSequence(0);
             int totalMaxLength = Math.min(2048, inputIds.length + Math.max(8, maxNewTokens));
 
@@ -200,32 +199,58 @@ public final class QwenEngine implements AutoCloseable {
         }
     }
 
-    private Sequences encodeTrimmedPrompt(String initialPrompt, List<ChatTurn> snapshot,
+    private Sequences encodeTrimmedPrompt(List<ChatTurn> snapshot,
                                            String question, String webContext)
             throws Exception {
-        Sequences encoded = tokenizer.encode(initialPrompt);
-        if (encoded.getSequence(0).length <= MAX_PROMPT_TOKENS) return encoded;
-
-        encoded.close();
-
         ArrayList<ChatTurn> recent = new ArrayList<>(snapshot);
-        while (!recent.isEmpty()) {
-            if (recent.size() >= 2) {
-                recent.remove(0);
-                recent.remove(0);
-            } else {
-                recent.clear();
+
+        // Keep the most recent two full user/assistant exchanges whenever possible.
+        final int minRecentMessages = Math.min(4, recent.size());
+
+        String fittedWeb = webContext == null ? "" : webContext.trim();
+
+        while (true) {
+            String prompt = buildPrompt(recent, question, fittedWeb);
+            Sequences encoded = tokenizer.encode(prompt);
+            if (encoded.getSequence(0).length <= MAX_PROMPT_TOKENS) {
+                return encoded;
+            }
+            encoded.close();
+
+            // First sacrifice old history, never the newest two exchanges.
+            if (recent.size() > minRecentMessages) {
+                int remove = Math.min(2, recent.size() - minRecentMessages);
+                for (int i = 0; i < remove; i++) recent.remove(0);
+                continue;
             }
 
-            String prompt = buildPrompt(recent, question, webContext);
-            Sequences attempt = tokenizer.encode(prompt);
-            if (attempt.getSequence(0).length <= MAX_PROMPT_TOKENS || recent.isEmpty()) {
-                return attempt;
+            // Then shrink web evidence before sacrificing recent conversation context.
+            if (!fittedWeb.isEmpty()) {
+                if (fittedWeb.length() > 2200) {
+                    fittedWeb = fittedWeb.substring(0, 2200);
+                    continue;
+                }
+                if (fittedWeb.length() > 1200) {
+                    fittedWeb = fittedWeb.substring(0, 1200);
+                    continue;
+                }
+                if (fittedWeb.length() > 600) {
+                    fittedWeb = fittedWeb.substring(0, 600);
+                    continue;
+                }
+                fittedWeb = "";
+                continue;
             }
-            attempt.close();
+
+            // As a last resort keep only the immediately previous exchange.
+            if (recent.size() > 2) {
+                recent = new ArrayList<>(recent.subList(recent.size() - 2, recent.size()));
+                continue;
+            }
+
+            // Current question must always be preserved.
+            return tokenizer.encode(buildPrompt(recent, question, ""));
         }
-
-        return tokenizer.encode(buildPrompt(Collections.emptyList(), question, webContext));
     }
 
     private String buildPrompt(List<ChatTurn> history, String question, String webContext) {
