@@ -33,14 +33,22 @@ public final class TextFileTool {
 
     public static String suggestedFileName(String request) {
         String base = "H33_" + System.currentTimeMillis();
+
         if (request != null) {
-            Pattern p = Pattern.compile("(?:باسم|اسمه|اسم الملف)\\s*[\\"'«»]?([^\\n\\r\\"'«»]{1,40})");
+            Pattern p = Pattern.compile("(?:باسم|اسمه|اسم الملف)\\s+([^\\n\\r]{1,40})");
             Matcher m = p.matcher(request);
-            if (m.find()) base = m.group(1).trim();
+            if (m.find()) {
+                base = m.group(1).trim();
+                int dot = base.toLowerCase(Locale.ROOT).indexOf(".txt");
+                if (dot >= 0) base = base.substring(0, dot);
+                base = base.replace("\"", "")
+                        .replace("'", "")
+                        .replace("«", "")
+                        .replace("»", "");
+            }
         }
-        base = base.replaceAll("[\\/:*?\\"<>|]", "_")
-                .replaceAll("\\s+", "_")
-                .replaceAll("\\.txt$", "");
+
+        base = sanitizeBase(base);
         if (base.length() > 48) base = base.substring(0, 48);
         if (base.isEmpty()) base = "H33_" + System.currentTimeMillis();
         return base + ".txt";
@@ -55,7 +63,8 @@ public final class TextFileTool {
             ContentValues values = new ContentValues();
             values.put(MediaStore.Downloads.DISPLAY_NAME, safe);
             values.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
-            values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/H33");
+            values.put(MediaStore.Downloads.RELATIVE_PATH,
+                    Environment.DIRECTORY_DOWNLOADS + "/H33");
             values.put(MediaStore.Downloads.IS_PENDING, 1);
 
             Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
@@ -63,7 +72,9 @@ public final class TextFileTool {
 
             try {
                 try (OutputStream out = resolver.openOutputStream(uri, "w")) {
-                    if (out == null) throw new IllegalStateException("تعذر فتح الملف للكتابة");
+                    if (out == null) {
+                        throw new IllegalStateException("تعذر فتح الملف للكتابة");
+                    }
                     out.write(bytes);
                     out.flush();
                 }
@@ -80,8 +91,12 @@ public final class TextFileTool {
 
         File root = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS);
         if (root == null) root = context.getFilesDir();
+
         File dir = new File(root, "H33");
-        if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("تعذر إنشاء مجلد H33");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IllegalStateException("تعذر إنشاء مجلد H33");
+        }
+
         File file = new File(dir, safe);
         try (FileOutputStream out = new FileOutputStream(file, false)) {
             out.write(bytes);
@@ -93,11 +108,37 @@ public final class TextFileTool {
     private static String sanitize(String fileName) {
         String name = fileName == null ? "H33.txt" : fileName.trim();
         if (name.isEmpty()) name = "H33.txt";
-        name = name.replaceAll("[\\/:*?\\"<>|]", "_");
-        if (!name.toLowerCase(Locale.ROOT).endsWith(".txt")) name += ".txt";
-        if (name.length() > 64) {
-            name = name.substring(0, Math.min(60, name.length())) + ".txt";
+
+        name = sanitizeBase(name);
+
+        if (!name.toLowerCase(Locale.ROOT).endsWith(".txt")) {
+            name += ".txt";
         }
+
+        if (name.length() > 64) {
+            String base = name.substring(0, Math.min(58, name.length()));
+            if (base.toLowerCase(Locale.ROOT).endsWith(".txt")) {
+                return base;
+            }
+            name = base + ".txt";
+        }
+
         return name;
+    }
+
+    private static String sanitizeBase(String value) {
+        if (value == null) return "";
+        return value
+                .replace('\\', '_')
+                .replace('/', '_')
+                .replace(':', '_')
+                .replace('*', '_')
+                .replace('?', '_')
+                .replace('\"', '_')
+                .replace('<', '_')
+                .replace('>', '_')
+                .replace('|', '_')
+                .replaceAll("\\s+", "_")
+                .trim();
     }
 }
