@@ -1,12 +1,15 @@
-name: Build H33 AraGPT2 Learning APK
+name: Build H33 Qwen2.5 INT4 APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [qwen2.5-mobile]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+
     steps:
       - uses: actions/checkout@v4
 
@@ -15,21 +18,32 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install model conversion dependencies
+      - name: Install Qwen conversion/runtime toolchain
         run: |
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1"
-          pip install "transformers==4.55.4" "optimum-onnx" "safetensors>=0.5" "onnx>=1.17" "onnxruntime>=1.24,<2" "numpy<3" sentencepiece
+          pip install "onnxruntime-genai==0.15.2" "transformers==4.55.4" "huggingface-hub>=0.34,<1" "numpy<3" sentencepiece
 
-      - name: Export AraGPT2 with Optimum and quantize
-        run: python scripts/export_aragpt2_onnx.py
-
-      - name: Keep preferred model and inspect assets
+      - name: Build Qwen2.5-0.5B-Instruct INT4 for ORT GenAI CPU
         run: |
-          if [ -f app/src/main/assets/aragpt2.int8.onnx ]; then
-            rm -f app/src/main/assets/aragpt2.fp32.onnx
-          fi
-          ls -lh app/src/main/assets/
+          rm -rf app/src/main/assets/model
+          mkdir -p app/src/main/assets/model
+          python -m onnxruntime_genai.models.builder             -m Qwen/Qwen2.5-0.5B-Instruct             -o app/src/main/assets/model             -p int4             -e cpu             --extra_options hf_remote=false
+
+      - name: Inspect model package
+        run: |
+          test -f app/src/main/assets/model/genai_config.json
+          find app/src/main/assets/model -maxdepth 2 -type f -printf '%p %k KB\n' | sort
+          du -sh app/src/main/assets/model
+
+      - name: Arabic Qwen smoke test
+        run: python scripts/smoke_qwen_genai.py
+
+      - name: Download verified ORT GenAI Android AAR
+        run: |
+          mkdir -p app/libs
+          curl -L --fail --retry 3             https://github.com/microsoft/onnxruntime-genai/releases/download/v0.15.2/onnxruntime-genai-android-0.15.2.aar             -o app/libs/onnxruntime-genai.aar
+          echo "f507ddbf0f635554ab12fcbf7dcfb115981eb664b925d90f28ed598dd8eb2ee7  app/libs/onnxruntime-genai.aar" | sha256sum -c -
 
       - name: Install Android platform
         run: |
@@ -37,12 +51,7 @@ jobs:
           if [ -z "$SDKMANAGER" ]; then
             SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager 2>/dev/null | sort | tail -n 1)"
           fi
-          if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found under ANDROID_HOME=$ANDROID_HOME"
-            find "$ANDROID_HOME" -maxdepth 4 -type f | head -200
-            exit 1
-          fi
-          echo "Using sdkmanager: $SDKMANAGER"
+          test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
 
@@ -60,10 +69,26 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
+      - name: Static APK audit
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          sha256sum "$APK" | tee apk.sha256
+          unzip -l "$APK" | tee apk-files.txt
+          if unzip -l "$APK" | grep -q 'lib/armeabi-v7a/'; then
+            echo "Unexpected 32-bit native libraries"
+            exit 1
+          fi
+          unzip -l "$APK" | grep 'lib/arm64-v8a/.*\.so' || true
+          echo "APK bytes: $(stat -c%s "$APK")"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AraGPT2-Android-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: H33-Qwen2.5-Android-APK
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            apk.sha256
+            apk-files.txt
           compression-level: 0
           retention-days: 7
