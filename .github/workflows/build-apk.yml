@@ -23,7 +23,7 @@ jobs:
           pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1"
           pip install "transformers==4.55.4" "optimum-onnx" "safetensors>=0.5" "onnx>=1.17" "onnxruntime>=1.24,<2" "numpy<3" sentencepiece
 
-      - name: Export AraGPT2 with hidden-state output and quantize
+      - name: Export AraGPT2 with Optimum and quantize
         run: python scripts/export_aragpt2_onnx.py
 
       - name: Keep preferred model and inspect assets
@@ -33,11 +33,10 @@ jobs:
           fi
           ls -lh app/src/main/assets/
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android platform
-        run: sdkmanager "platforms;android-37" "build-tools;36.0.0"
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/16.0/bin/sdkmanager" "platforms;android-37" "build-tools;36.0.0"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
