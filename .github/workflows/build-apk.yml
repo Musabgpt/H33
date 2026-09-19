@@ -1,0 +1,60 @@
+name: Build H33 AraGPT2 Learning APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install model conversion dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "torch>=2.7,<3" "transformers>=4.55,<5" "safetensors>=0.5" "onnx>=1.17" "onnxruntime>=1.24,<2" numpy sentencepiece
+
+      - name: Export AraGPT2 with hidden-state output and quantize
+        run: python scripts/export_aragpt2_onnx.py
+
+      - name: Keep preferred model and inspect assets
+        run: |
+          if [ -f app/src/main/assets/aragpt2.int8.onnx ]; then
+            rm -f app/src/main/assets/aragpt2.fp32.onnx
+          fi
+          ls -lh app/src/main/assets/
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-37" "build-tools;36.0.0"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Build debug APK
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AraGPT2-Android-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          compression-level: 0
+          retention-days: 7
