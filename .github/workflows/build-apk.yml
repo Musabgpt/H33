@@ -2,6 +2,8 @@ name: Build H33 Qwen2.5 INT4 APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [qwen2.5-mobile]
 
 jobs:
   build:
@@ -36,6 +38,31 @@ jobs:
 
       - name: Arabic Qwen smoke test
         run: python scripts/smoke_qwen_genai.py
+
+      - name: Real web backend smoke test
+        run: |
+          python - <<'PY'
+          import urllib.request
+
+          def get(url):
+              req = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36",
+                      "Accept-Language": "ar,en;q=0.8",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  return r.read(500000).decode("utf-8", "ignore")
+
+          rss = get("https://www.bing.com/search?q=OpenAI&format=rss&setlang=en")
+          assert "<item>" in rss.lower(), "Bing RSS returned no search items"
+
+          page = get("https://example.com/")
+          assert "Example Domain" in page, "Direct HTTPS page fetch failed"
+
+          print("WEB_BACKEND_SMOKE_OK")
+          PY
 
       - name: Download verified ORT GenAI Android AAR
         run: |
