@@ -1,0 +1,10 @@
+.gradle/
+.idea/
+local.properties
+**/build/
+app/src/main/assets/*.onnx
+app/src/main/assets/tokenizer.json
+app/src/main/assets/vocab.json
+app/src/main/assets/merges.txt
+app/src/main/assets/tokenizer_config.json
+app/src/main/assets/special_tokens_map.json
