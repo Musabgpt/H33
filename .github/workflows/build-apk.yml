@@ -2,6 +2,8 @@ name: Build H33 AraGPT2 Learning APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 jobs:
   build:
@@ -14,7 +16,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install model conversion dependencies
         run: |
