@@ -1,96 +1,88 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import shutil
+import subprocess
+import sys
+
+import numpy as np
+import onnxruntime as ort
+from onnxruntime.quantization import QuantType, quantize_dynamic
+from transformers import AutoTokenizer
 
 MODEL_ID = "aubmindlab/aragpt2-base"
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "app" / "src" / "main" / "assets"
+EXPORT_DIR = ROOT / ".onnx_export"
 ASSETS.mkdir(parents=True, exist_ok=True)
+shutil.rmtree(EXPORT_DIR, ignore_errors=True)
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-print("Loading", MODEL_ID)
+print("Exporting with Hugging Face Optimum ONNX:", MODEL_ID, flush=True)
+cmd = [
+    "optimum-cli", "export", "onnx",
+    "--model", MODEL_ID,
+    "--task", "text-generation",
+    "--monolith",
+    "--opset", "17",
+    str(EXPORT_DIR),
+]
+subprocess.run(cmd, check=True)
+
+onnx_files = sorted(EXPORT_DIR.glob("*.onnx"), key=lambda p: p.stat().st_size, reverse=True)
+if not onnx_files:
+    raise SystemExit("Optimum did not produce an ONNX model")
+source = onnx_files[0]
+print("Optimum model:", source, round(source.stat().st_size / 1024 / 1024, 1), "MB", flush=True)
+
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=False)
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_ID,
-    attn_implementation="eager",
-)
-# Force the export-friendly attention path. Recent Transformers may otherwise
-# route tracing through SDPA/flex-attention internals that are not export-safe.
-if hasattr(model.config, "_attn_implementation"):
-    model.config._attn_implementation = "eager"
-model.eval()
-
-class LastTokenWithHidden(torch.nn.Module):
-    """Return only next-token logits and the last hidden vector to keep Android RAM low."""
-    def __init__(self, m):
-        super().__init__()
-        self.transformer = m.transformer
-        self.lm_head = m.lm_head
-
-    def forward(self, input_ids, attention_mask):
-        out = self.transformer(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            use_cache=False,
-            return_dict=True,
-        )
-        hidden = out.last_hidden_state[:, -1, :]
-        logits = self.lm_head(hidden)
-        return logits, hidden
-
-wrapper = LastTokenWithHidden(model)
-ids = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
-mask = torch.ones_like(ids)
-fp32 = ASSETS / "aragpt2.fp32.onnx"
-print("Exporting", fp32)
-with torch.no_grad():
-    torch.onnx.export(
-        wrapper,
-        (ids, mask),
-        fp32.as_posix(),
-        input_names=["input_ids", "attention_mask"],
-        output_names=["logits", "hidden"],
-        dynamic_axes={
-            "input_ids": {1: "sequence"},
-            "attention_mask": {1: "sequence"},
-        },
-        opset_version=17,
-        do_constant_folding=True,
-        dynamo=False,
-    )
-
 tokenizer.save_pretrained(ASSETS)
 
-try:
-    from onnxruntime.quantization import quantize_dynamic, QuantType
-    int8 = ASSETS / "aragpt2.int8.onnx"
-    print("Quantizing", int8)
-    quantize_dynamic(
-        fp32.as_posix(),
-        int8.as_posix(),
-        weight_type=QuantType.QInt8,
-        per_channel=True,
-        reduce_range=False,
-        op_types_to_quantize=["MatMul", "Gemm"],
-    )
-    print("INT8 size MB:", round(int8.stat().st_size / 1024 / 1024, 1))
-except Exception as e:
-    print("INT8 quantization failed; FP32 will still be usable:", repr(e))
+int8 = ASSETS / "aragpt2.int8.onnx"
+if int8.exists():
+    int8.unlink()
 
-try:
-    import numpy as np
-    import onnxruntime as ort
-    candidate = ASSETS / "aragpt2.int8.onnx"
-    if not candidate.exists():
-        candidate = fp32
-    sess = ort.InferenceSession(candidate.as_posix(), providers=["CPUExecutionProvider"])
-    out = sess.run(None, {
-        "input_ids": ids.numpy().astype(np.int64),
-        "attention_mask": mask.numpy().astype(np.int64),
-    })
-    assert out[0].shape == (1, model.config.vocab_size), out[0].shape
-    assert out[1].shape == (1, model.config.n_embd), out[1].shape
-    assert np.isfinite(out[0]).all() and np.isfinite(out[1]).all()
-    print("Smoke test OK:", out[0].shape, out[1].shape)
-except Exception as e:
-    raise SystemExit("ONNX smoke test failed: " + repr(e))
+print("Quantizing to INT8:", int8, flush=True)
+quantize_dynamic(
+    source.as_posix(),
+    int8.as_posix(),
+    weight_type=QuantType.QInt8,
+    per_channel=True,
+    reduce_range=False,
+    op_types_to_quantize=["MatMul", "Gemm"],
+)
+
+if not int8.exists() or int8.stat().st_size < 50 * 1024 * 1024:
+    raise SystemExit("INT8 model was not produced correctly")
+print("INT8 size MB:", round(int8.stat().st_size / 1024 / 1024, 1), flush=True)
+
+print("Running ONNX smoke test...", flush=True)
+sess = ort.InferenceSession(int8.as_posix(), providers=["CPUExecutionProvider"])
+print("Inputs:", [(x.name, x.shape, x.type) for x in sess.get_inputs()], flush=True)
+print("Outputs:", [(x.name, x.shape, x.type) for x in sess.get_outputs()], flush=True)
+
+ids = np.asarray([[0, 1, 2, 3]], dtype=np.int64)
+mask = np.ones_like(ids)
+pos = np.arange(ids.shape[1], dtype=np.int64)[None, :]
+feed = {}
+for inp in sess.get_inputs():
+    name = inp.name
+    if name == "input_ids":
+        feed[name] = ids
+    elif name == "attention_mask":
+        feed[name] = mask
+    elif name == "position_ids":
+        feed[name] = pos
+    elif name == "token_type_ids":
+        feed[name] = np.zeros_like(ids)
+    else:
+        raise SystemExit(f"Unexpected required ONNX input: {name}")
+
+outputs = sess.run(None, feed)
+logits = outputs[0]
+if logits.ndim != 3 or logits.shape[0] != 1 or logits.shape[1] != ids.shape[1]:
+    raise SystemExit(f"Unexpected logits shape: {logits.shape}")
+if not np.isfinite(logits).all():
+    raise SystemExit("Non-finite logits in ONNX smoke test")
+
+print("Smoke test OK:", logits.shape, flush=True)
+shutil.rmtree(EXPORT_DIR, ignore_errors=True)
