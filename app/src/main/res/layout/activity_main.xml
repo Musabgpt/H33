@@ -1,124 +1,107 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true"
-    android:layoutDirection="rtl">
+    android:orientation="vertical"
+    android:layoutDirection="rtl"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="8dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
 
         <TextView
-            android:layout_width="match_parent"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:text="H33 Qwen2.5 — مساعد عربي محلي"
+            android:layout_weight="1"
+            android:text="H33 Qwen2.5"
             android:textStyle="bold"
-            android:textSize="22sp"
+            android:textSize="21sp"
             android:gravity="start" />
-
-        <TextView
-            android:id="@+id/status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="جاري التهيئة…"
-            android:paddingTop="8dp"
-            android:paddingBottom="12dp"
-            android:gravity="start"
-            android:textIsSelectable="true" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="1) السؤال"
-            android:textStyle="bold"
-            android:gravity="start" />
-
-        <EditText
-            android:id="@+id/questionBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="72dp"
-            android:maxLines="6"
-            android:hint="اكتب سؤالك هنا"
-            android:gravity="start|top"
-            android:inputType="textMultiLine|textCapSentences" />
 
         <Button
-            android:id="@+id/askButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="اسأل Qwen"
-            android:enabled="false" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="2) جواب النموذج"
-            android:textStyle="bold"
-            android:paddingTop="14dp"
-            android:gravity="start" />
-
-        <EditText
-            android:id="@+id/answerBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="120dp"
-            android:maxLines="12"
-            android:hint="سيظهر جواب Qwen هنا"
-            android:gravity="start|top"
-            android:textIsSelectable="true"
-            android:focusable="false"
-            android:cursorVisible="false" />
-
-        <Button
-            android:id="@+id/correctButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="✓ الإجابة صحيحة — تذكّرها"
-            android:enabled="false" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="3) التصحيح / الجواب الأفضل"
-            android:textStyle="bold"
-            android:paddingTop="14dp"
-            android:gravity="start" />
-
-        <EditText
-            android:id="@+id/correctionBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="110dp"
-            android:maxLines="10"
-            android:hint="إذا كان الجواب خطأ، اكتب الجواب الصحيح هنا"
-            android:gravity="start|top"
-            android:inputType="textMultiLine|textCapSentences" />
-
-        <Button
-            android:id="@+id/teachButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="علّم من التصحيح"
-            android:enabled="false" />
-
-        <Button
-            android:id="@+id/clearButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="مسح الحقول"
-            android:layout_marginTop="8dp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="التصحيحات تبقى محفوظة محليًا على الهاتف. هذه النسخة تستخدم ذاكرة تعلم مباشرة مع Qwen؛ تحديث أوزان Qwen نفسه يحتاج مسار تدريب native منفصل."
-            android:textSize="12sp"
-            android:paddingTop="8dp"
-            android:gravity="start" />
-
+            android:id="@+id/newChatButton"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:minWidth="0dp"
+            android:text="＋ جديد"
+            android:textAllCaps="false" />
     </LinearLayout>
-</ScrollView>
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="جاري تحميل النموذج…"
+        android:textSize="12sp"
+        android:alpha="0.75"
+        android:gravity="start"
+        android:paddingTop="4dp"
+        android:paddingBottom="6dp" />
+
+    <ScrollView
+        android:id="@+id/chatScroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:clipToPadding="false"
+        android:paddingBottom="8dp">
+
+        <LinearLayout
+            android:id="@+id/messagesContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="12dp" />
+    </ScrollView>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="bottom|center_vertical"
+        android:paddingTop="6dp">
+
+        <EditText
+            android:id="@+id/inputBox"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:minHeight="52dp"
+            android:maxHeight="150dp"
+            android:maxLines="6"
+            android:hint="اكتب رسالة…"
+            android:gravity="start|center_vertical"
+            android:inputType="textMultiLine|textCapSentences"
+            android:imeOptions="actionSend"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp" />
+
+        <Button
+            android:id="@+id/stopButton"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:minWidth="0dp"
+            android:text="■"
+            android:visibility="gone" />
+
+        <Button
+            android:id="@+id/sendButton"
+            android:layout_width="58dp"
+            android:layout_height="52dp"
+            android:minWidth="0dp"
+            android:text="↑"
+            android:textSize="20sp"
+            android:enabled="false" />
+    </LinearLayout>
+
+</LinearLayout>
