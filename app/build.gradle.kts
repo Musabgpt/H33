@@ -10,8 +10,8 @@ android {
         applicationId = "com.musab.aragpt2"
         minSdk = 28
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0-qwen"
+        versionCode = 4
+        versionName = "0.4.0-fable-tools"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
