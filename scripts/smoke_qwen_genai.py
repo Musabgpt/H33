@@ -44,15 +44,15 @@ print("Loading Qwen INT4 GenAI model...", flush=True)
 # Basic Arabic factual test.
 prompt = (
     "<|im_start|>system\n" + SYSTEM + "<|im_end|>\n"
-    "<|im_start|>user\nما عاصمة فرنسا؟<|im_end|>\n"
+    "<|im_start|>user\nما ناتج 7 ضرب 8؟ أجب بالرقم فقط.<|im_end|>\n"
     "<|im_start|>assistant\n"
 )
 answer = run_prompt(prompt, 32)
 print("SMOKE ANSWER:", answer, flush=True)
 if not answer:
     raise SystemExit("Qwen smoke test produced empty output")
-if "باريس" not in answer and "paris" not in answer.lower():
-    raise SystemExit("Qwen smoke test did not answer the factual Arabic prompt as expected")
+if "56" not in answer:
+    raise SystemExit("Qwen smoke test did not answer the arithmetic prompt as expected")
 
 # Multi-turn session-memory test.
 memory_prompt = (
