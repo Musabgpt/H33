@@ -32,7 +32,7 @@ def normalize_answer(value) -> str:
     text = _ARABIC_DIACRITICS.sub("", text)
     text = text.lower()
     text = re.sub(r"[_*~]+", " ", text)
-    text = re.sub(r"[^\w\s\u0600-\u06FF.+\-/]", " ", text, flags=re.UNICODE)
+    text = re.sub(r"[^\w\s\u0600-\u06FF]", " ", text, flags=re.UNICODE)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
