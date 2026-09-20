@@ -136,6 +136,57 @@ def model_dtype_kwargs(transformers_version: str, dtype) -> dict:
     return {"torch_dtype": dtype}
 
 
+def parameter_fingerprint(model, *, trainable_only: bool = True) -> str:
+    digest = hashlib.sha256()
+    seen = set()
+    count = 0
+
+    named_parameters = getattr(model, "named_parameters", None)
+    if not callable(named_parameters):
+        raise ValueError("model does not expose named_parameters")
+
+    for name, param in named_parameters():
+        if trainable_only and not bool(param.requires_grad):
+            continue
+        identity = id(param)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        count += 1
+
+        tensor = param.detach().float().cpu().contiguous()
+        digest.update(str(name).encode("utf-8"))
+        digest.update(str(tuple(tensor.shape)).encode("ascii"))
+        digest.update(memoryview(tensor.numpy()).cast("B"))
+
+    if count == 0:
+        raise ValueError("no parameters available for fingerprint")
+    return digest.hexdigest()
+
+
+def weight_change_evidence(
+    *,
+    initial_fingerprint: str,
+    final_fingerprint: str,
+    starting_global_step: int,
+    ending_global_step: int,
+    prior_changed: bool,
+) -> bool:
+    if starting_global_step < 0 or ending_global_step < starting_global_step:
+        raise ValueError("invalid optimizer step range")
+
+    new_steps = ending_global_step - starting_global_step
+    changed_this_session = (
+        new_steps > 0
+        and str(initial_fingerprint) != str(final_fingerprint)
+    )
+    if new_steps > 0 and not changed_this_session:
+        raise RuntimeError(
+            "optimizer steps completed but selected original Qwen weights did not change"
+        )
+    return bool(prior_changed or changed_this_session)
+
+
 def _atomic_write_json(path: Path, value: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
