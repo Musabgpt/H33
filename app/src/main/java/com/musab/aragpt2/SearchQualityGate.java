@@ -17,12 +17,16 @@ public final class SearchQualityGate {
     ));
 
     private static final Set<String> AR_STOP = new HashSet<>(Arrays.asList(
-            "من", "هو", "هي", "ما", "ماذا", "هل", "في", "على", "الى", "إلى",
+            "من", "هو", "هي", "ما", "ماذا", "ماهي", "وماهي", "ماهو", "وماهو",
+            "هل", "كم", "عدد", "في", "على", "الى", "إلى", "عن", "مع",
             "الحالي", "حالي", "حاليا", "حالياً", "اليوم", "يوم", "الآن", "الان"
     ));
 
     private static final Set<String> EN_STOP = new HashSet<>(Arrays.asList(
-            "who", "is", "the", "a", "an", "current", "today", "now", "of", "in"
+            "who", "what", "which", "where", "when", "why", "how", "many", "much",
+            "is", "are", "was", "were", "be", "been", "there", "the", "a", "an",
+            "and", "or", "their", "its", "do", "does", "did", "current", "today",
+            "now", "of", "in", "on", "at", "to", "for", "from", "with", "by"
     ));
 
     private SearchQualityGate() {}
