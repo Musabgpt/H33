@@ -36,7 +36,7 @@ public class PreferenceRecordTest {
 
         JSONObject json = new JSONObject(record.toJson());
 
-        assertEquals(1, json.getInt("schema_version"));
+        assertEquals(2, json.getInt("schema_version"));\n        assertEquals("user_approved", json.getString("memory_semantics"));
         assertEquals("t1", json.getString("turn_id"));
         assertEquals("question", json.getString("question"));
         assertEquals(3, json.getJSONArray("candidates").length());
