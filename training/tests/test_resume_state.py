@@ -5,6 +5,7 @@ from training.train_partial_sft import (
     build_epoch_order,
     cursor_after_optimizer_step,
     optimizer_step_groups,
+    optimizer_limit_reached,
 )
 
 
@@ -113,6 +114,13 @@ class ResumeStateTest(unittest.TestCase):
                 start_offset=6,
                 gradient_accumulation_steps=2,
             )
+
+
+    def test_step_limit_is_checked_before_resuming_more_work(self):
+        self.assertTrue(optimizer_limit_reached(10, 10))
+        self.assertTrue(optimizer_limit_reached(11, 10))
+        self.assertFalse(optimizer_limit_reached(9, 10))
+        self.assertFalse(optimizer_limit_reached(999, 0))
 
 
 
