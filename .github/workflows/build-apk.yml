@@ -3,7 +3,7 @@ name: Build H33 Qwen2.5 INT4 APK
 on:
   workflow_dispatch:
   push:
-    branches: [qwen2.5-mobile]
+    branches: [qwen2.5-mobile, h33-three-candidate-native]
 
 jobs:
   build:
@@ -90,6 +90,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.0'
+
+      - name: Run deterministic Android JVM tests
+        run: gradle :app:testDebugUnitTest --stacktrace
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
