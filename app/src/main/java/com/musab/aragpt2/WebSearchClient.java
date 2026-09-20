@@ -200,7 +200,7 @@ public final class WebSearchClient {
         }
     }
 
-    private static List<SearchResult> searchDuckDuckGoHtml(
+    static List<SearchResult> searchDuckDuckGoHtml(
             String query, int maxResults) throws Exception {
         String encoded = URLEncoder.encode(
                 query, StandardCharsets.UTF_8.name());
@@ -220,7 +220,7 @@ public final class WebSearchClient {
         }
     }
 
-    private static List<SearchResult> searchBingRss(String query, int maxResults) throws Exception {
+    static List<SearchResult> searchBingRss(String query, int maxResults) throws Exception {
         String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
         URL url = new URL("https://www.bing.com/search?q=" + encoded + "&format=rss&setlang=ar");
         HttpURLConnection conn = open(url, "application/rss+xml,application/xml,text/xml,*/*;q=0.5");
@@ -269,7 +269,7 @@ public final class WebSearchClient {
         }
     }
 
-    private static List<SearchResult> searchDuckDuckGoInstant(String query, int maxResults) throws Exception {
+    static List<SearchResult> searchDuckDuckGoInstant(String query, int maxResults) throws Exception {
         String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
         URL url = new URL("https://api.duckduckgo.com/?q=" + encoded +
                 "&format=json&no_html=1&no_redirect=1&skip_disambig=1");
