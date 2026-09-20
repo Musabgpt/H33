@@ -63,7 +63,8 @@ jobs:
             gradle -p benchmarks/mlkit-android :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
             adb install -r benchmarks/mlkit-android/app/build/outputs/apk/debug/app-debug.apk
             adb install -r benchmarks/mlkit-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            adb shell am instrument -w -r com.musab.h33bench.test/androidx.test.runner.AndroidJUnitRunner | tee artifacts/h33-all-comparison/mlkit_instrumentation.log
+            adb shell am instrument -w -r com.musab.h33bench.test/androidx.test.runner.AndroidJUnitRunner > artifacts/h33-all-comparison/mlkit_instrumentation.log
+            cat artifacts/h33-all-comparison/mlkit_instrumentation.log
             adb shell pm path com.musab.h33bench
             adb exec-out run-as com.musab.h33bench cat files/mlkit_translation_results.json > artifacts/h33-all-comparison/mlkit_translation_results.json
             test -s artifacts/h33-all-comparison/mlkit_translation_results.json
