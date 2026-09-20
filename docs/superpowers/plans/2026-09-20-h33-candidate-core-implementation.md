@@ -398,14 +398,19 @@ git commit -m "refactor: separate Qwen candidates from chat persistence"
 **Files:**
 - Create: `app/src/main/java/com/musab/aragpt2/AnswerCandidate.java`
 - Create: `app/src/main/java/com/musab/aragpt2/CandidateSet.java`
+- Create: `app/src/main/java/com/musab/aragpt2/LocalAnswerProvider.java`
+- Create: `app/src/main/java/com/musab/aragpt2/QwenLocalAnswerProvider.java`
+- Create: `app/src/main/java/com/musab/aragpt2/WebEvidenceAnswerProvider.java`
 - Create: `app/src/main/java/com/musab/aragpt2/HostedAnswerProvider.java`
 - Create: `app/src/main/java/com/musab/aragpt2/UnavailableHostedAnswerProvider.java`
 - Create: `app/src/main/java/com/musab/aragpt2/CandidateCoordinator.java`
 - Create: `app/src/test/java/com/musab/aragpt2/CandidateModelTest.java`
+- Create: `app/src/test/java/com/musab/aragpt2/CandidateCoordinatorTest.java`
 
 **Interfaces:**
 - Produces: immutable candidate types consumed by UI and preference storage.
-- Consumes: `QwenEngine`, `WebSearchClient`, `HostedAnswerProvider`.
+- Produces provider boundaries: `LocalAnswerProvider`, `WebEvidenceAnswerProvider`, `HostedAnswerProvider`.
+- Consumes: `QwenEngine` and `WebSearchClient` only inside their provider implementations; the coordinator depends on provider interfaces so failure isolation can be unit-tested.
 
 - [ ] **Step 1: Write failing model tests**
 
@@ -444,40 +449,68 @@ String status;
 
 `CandidateSet` contains `turnId`, `question`, and exactly three candidate slots.
 
-- [ ] **Step 3: Define hosted provider abstraction**
+- [ ] **Step 3: Define provider abstractions**
 
 ```java
+public interface LocalAnswerProvider {
+    AnswerCandidate answer(String question, QwenEngine.StreamListener listener) throws Exception;
+}
+
+public interface WebEvidenceAnswerProvider {
+    AnswerCandidate answer(String question) throws Exception;
+}
+
 public interface HostedAnswerProvider {
     AnswerCandidate answer(String question) throws Exception;
 }
 ```
 
+`QwenLocalAnswerProvider` calls `QwenEngine.generateCandidate(question, ..., "", false, listener)`.
+
+`WebEvidenceAnswerProvider` calls `WebSearchClient.resolve`; when usable evidence exists it calls `QwenEngine.generateCandidate(question, ..., payload.context, true, null)`. If search or synthesis fails, it returns an unavailable WEB candidate with a status string instead of throwing beyond the provider boundary.
+
 `UnavailableHostedAnswerProvider.answer` returns an unavailable HOSTED candidate; it never throws merely because no provider is configured.
 
-- [ ] **Step 4: Implement synchronous coordinator**
+- [ ] **Step 4: Write coordinator failure-isolation tests**
+
+Use fake providers. Pin these behaviors:
+
+```java
+@Test
+public void localFailureStillAllowsHostedCandidate() { ... }
+
+@Test
+public void webFailureDoesNotDiscardLocalCandidate() { ... }
+
+@Test
+public void hostedFailureDoesNotDiscardLocalOrWebCandidates() { ... }
+```
+
+Each fake provider either returns a fixed `AnswerCandidate` or throws. Assert the returned `CandidateSet` still contains three honest slots.
+
+- [ ] **Step 5: Implement synchronous coordinator**
 
 `CandidateCoordinator.create(String question, Listener listener)`:
 
 1. Create `turnId = UUID.randomUUID().toString()`.
-2. Generate local candidate with no web context and no persistence.
-3. Resolve/filter web evidence.
-4. If evidence usable, generate evidence-only web candidate; otherwise mark WEB unavailable.
-5. Ask hosted provider; catch provider-specific failure and mark HOSTED unavailable.
-6. Commit LOCAL as the provisional canonical turn only after candidate generation is finished.
-7. Return the complete `CandidateSet`.
+2. Call LOCAL provider; convert an exception to unavailable LOCAL.
+3. Call WEB provider; convert an exception to unavailable WEB.
+4. Call HOSTED provider; convert an exception to unavailable HOSTED.
+5. If LOCAL is available, commit it as the provisional canonical turn only after candidate generation is finished. If LOCAL is unavailable but another candidate is available, commit no provisional turn; selection will create the canonical turn.
+6. Return the complete `CandidateSet`.
 
 Do not run two Qwen generations concurrently against the same `QwenEngine`.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 6: Run tests**
 
 ```bash
 gradle :app:testDebugUnitTest --stacktrace
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add app/src/main/java/com/musab/aragpt2/AnswerCandidate.java app/src/main/java/com/musab/aragpt2/CandidateSet.java app/src/main/java/com/musab/aragpt2/HostedAnswerProvider.java app/src/main/java/com/musab/aragpt2/UnavailableHostedAnswerProvider.java app/src/main/java/com/musab/aragpt2/CandidateCoordinator.java app/src/test/java/com/musab/aragpt2/CandidateModelTest.java
+git add app/src/main/java/com/musab/aragpt2/AnswerCandidate.java app/src/main/java/com/musab/aragpt2/CandidateSet.java app/src/main/java/com/musab/aragpt2/LocalAnswerProvider.java app/src/main/java/com/musab/aragpt2/QwenLocalAnswerProvider.java app/src/main/java/com/musab/aragpt2/WebEvidenceAnswerProvider.java app/src/main/java/com/musab/aragpt2/HostedAnswerProvider.java app/src/main/java/com/musab/aragpt2/UnavailableHostedAnswerProvider.java app/src/main/java/com/musab/aragpt2/CandidateCoordinator.java app/src/test/java/com/musab/aragpt2/CandidateModelTest.java app/src/test/java/com/musab/aragpt2/CandidateCoordinatorTest.java
 git commit -m "feat: add three-candidate answer orchestration"
 ```
 
