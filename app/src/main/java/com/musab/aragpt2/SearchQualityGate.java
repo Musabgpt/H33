@@ -4,36 +4,26 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 public final class SearchQualityGate {
-    private static final double MIN_RELEVANCE = 0.18;
+    private static final Set<String> DENIED_HOST_FRAGMENTS = new HashSet<>(Arrays.asList(
+            "xnxx", "xvideos", "pornhub", "redtube", "youporn", "xhamster"
+    ));
 
-    private static final Set<String> DENIED_HOST_FRAGMENTS =
-            new HashSet<>(Arrays.asList(
-                    "xnxx", "xvideos", "pornhub", "redtube", "youporn", "xhamster"
-            ));
+    private static final Set<String> AR_STOP = new HashSet<>(Arrays.asList(
+            "من", "هو", "هي", "ما", "ماذا", "هل", "في", "على", "الى", "إلى",
+            "الحالي", "حاليا", "حالياً", "اليوم", "الآن", "الان"
+    ));
 
-    private static final Set<String> DENIED_CONTENT_TOKENS =
-            new HashSet<>(Arrays.asList(
-                    "porn", "porno", "xxx", "sex", "adult", "nudes", "nude"
-            ));
-
-    private static final Set<String> AR_STOP =
-            new HashSet<>(Arrays.asList(
-                    "من", "هو", "هي", "ما", "ماذا", "هل", "في", "على", "الى", "إلى",
-                    "الحالي", "حاليا", "حالياً", "اليوم", "الآن", "الان"
-            ));
-
-    private static final Set<String> EN_STOP =
-            new HashSet<>(Arrays.asList(
-                    "who", "is", "the", "a", "an", "current", "today", "now", "of", "in"
-            ));
+    private static final Set<String> EN_STOP = new HashSet<>(Arrays.asList(
+            "who", "is", "the", "a", "an", "current", "today", "now", "of", "in"
+    ));
 
     private SearchQualityGate() {}
 
@@ -42,41 +32,45 @@ public final class SearchQualityGate {
         public final List<SearchResult> rejected;
 
         Result(List<SearchResult> accepted, List<SearchResult> rejected) {
-            this.accepted = Collections.unmodifiableList(accepted);
-            this.rejected = Collections.unmodifiableList(rejected);
+            this.accepted = Collections.unmodifiableList(new ArrayList<>(accepted));
+            this.rejected = Collections.unmodifiableList(new ArrayList<>(rejected));
         }
     }
 
-    public static Result filter(String query, List<SearchResult> raw, int maxResults) {
-        if (maxResults <= 0 || raw == null || raw.isEmpty()) {
+    public static Result filter(String query, List<SearchResult> input, int maxResults) {
+        if (input == null || input.isEmpty() || maxResults <= 0) {
             return new Result(Collections.emptyList(), Collections.emptyList());
         }
 
         Set<String> queryTokens = significantTokens(query);
-        List<SearchResult> rejected = new ArrayList<>();
-        Map<String, SearchResult> bestByHost = new LinkedHashMap<>();
+        ArrayList<SearchResult> rejected = new ArrayList<>();
+        Map<String, SearchResult> bestByHost = new HashMap<>();
 
-        for (SearchResult source : raw) {
-            if (source == null || source.host.isEmpty() || isDenied(source)) {
-                if (source != null) rejected.add(source);
+        for (SearchResult raw : input) {
+            if (raw == null || raw.host.isEmpty() || isDeniedHost(raw.host)) {
+                if (raw != null) rejected.add(raw);
                 continue;
             }
 
-            double titleCoverage = coverage(queryTokens, tokens(source.title));
-            double bodyCoverage = coverage(queryTokens, tokens(source.snippet));
-            Set<String> combined = tokens(source.title + " " + source.snippet);
-            int matches = matchedCount(queryTokens, combined);
+            Set<String> titleTokens = tokens(raw.title);
+            Set<String> bodyTokens = tokens(raw.snippet);
+            Set<String> combined = new HashSet<>(titleTokens);
+            combined.addAll(bodyTokens);
+
+            int matched = matchedCount(queryTokens, combined);
+            double titleCoverage = coverage(queryTokens, titleTokens);
+            double bodyCoverage = coverage(queryTokens, bodyTokens);
             double score = Math.min(1.0, titleCoverage * 0.65 + bodyCoverage * 0.35);
 
-            if (queryTokens.isEmpty() || matches == 0 || score < MIN_RELEVANCE) {
-                rejected.add(source);
+            if (queryTokens.isEmpty() || matched == 0 || score < 0.16) {
+                rejected.add(raw.withRelevance(score));
                 continue;
             }
 
-            SearchResult scored = source.withRelevance(score);
-            SearchResult previous = bestByHost.get(scored.host);
-            if (previous == null || scored.relevance > previous.relevance) {
-                if (previous != null) rejected.add(previous);
+            SearchResult scored = raw.withRelevance(score);
+            SearchResult existing = bestByHost.get(scored.host);
+            if (existing == null || scored.relevance > existing.relevance) {
+                if (existing != null) rejected.add(existing);
                 bestByHost.put(scored.host, scored);
             } else {
                 rejected.add(scored);
@@ -94,76 +88,39 @@ public final class SearchQualityGate {
         return new Result(accepted, rejected);
     }
 
-    private static boolean isDenied(SearchResult r) {
-        String host = r.host.toLowerCase(Locale.ROOT);
-        for (String denied : DENIED_HOST_FRAGMENTS) {
-            if (host.contains(denied)) return true;
-        }
-
-        String content = normalize(r.title + " " + r.snippet);
-        Set<String> contentTokens = tokens(content);
-        int bad = 0;
-        for (String token : DENIED_CONTENT_TOKENS) {
-            if (contentTokens.contains(token)) bad++;
-        }
-        return bad >= 2;
-    }
-
-    private static double coverage(Set<String> query, Set<String> candidate) {
-        if (query.isEmpty() || candidate.isEmpty()) return 0.0;
-        return (double) matchedCount(query, candidate) / query.size();
-    }
-
-    private static int matchedCount(Set<String> query, Set<String> candidate) {
-        int count = 0;
-        for (String q : query) {
-            boolean found = false;
-            for (String c : candidate) {
-                if (equivalentToken(q, c)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (found) count++;
-        }
-        return count;
-    }
-
-    private static boolean equivalentToken(String a, String b) {
-        if (a.equals(b)) return true;
-        String x = stripArabicArticle(a);
-        String y = stripArabicArticle(b);
-        if (x.equals(y)) return true;
-
-        if (isArabicWord(x) && isArabicWord(y) && x.length() >= 4 && y.length() >= 4) {
-            if (Math.abs(x.length() - y.length()) <= 1 &&
-                    x.regionMatches(0, y, 0, Math.min(x.length(), y.length()) - 1)) {
-                return true;
-            }
+    private static boolean isDeniedHost(String host) {
+        String h = host.toLowerCase(Locale.ROOT);
+        for (String fragment : DENIED_HOST_FRAGMENTS) {
+            if (h.contains(fragment)) return true;
         }
         return false;
     }
 
-    private static String stripArabicArticle(String token) {
-        if (token.startsWith("ال") && token.length() > 4) return token.substring(2);
-        return token;
+    private static int matchedCount(Set<String> query, Set<String> candidate) {
+        int n = 0;
+        for (String token : query) {
+            if (candidate.contains(token)) n++;
+        }
+        return n;
     }
 
-    private static boolean isArabicWord(String token) {
-        return token.matches(".*[\\u0600-\\u06FF].*");
+    private static double coverage(Set<String> query, Set<String> candidate) {
+        if (query.isEmpty()) return 0.0;
+        return (double) matchedCount(query, candidate) / (double) query.size();
     }
 
-    private static Set<String> significantTokens(String text) {
-        Set<String> all = tokens(text);
-        all.removeIf(t -> AR_STOP.contains(t) || EN_STOP.contains(t));
-        return all;
+    private static Set<String> significantTokens(String value) {
+        Set<String> out = tokens(value);
+        out.removeAll(AR_STOP);
+        out.removeAll(EN_STOP);
+        return out;
     }
 
-    private static Set<String> tokens(String text) {
-        String normalized = normalize(text);
-        if (normalized.isEmpty()) return new HashSet<>();
-
+    private static Set<String> tokens(String value) {
         HashSet<String> out = new HashSet<>();
+        String normalized = normalize(value);
+        if (normalized.isEmpty()) return out;
+
         for (String token : normalized.split("\\s+")) {
             if (token.length() > 1) out.add(token);
         }
@@ -171,11 +128,23 @@ public final class SearchQualityGate {
     }
 
     private static String normalize(String value) {
-        String n = value == null ? "" : value.toLowerCase(Locale.ROOT);
-        n = n.replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا');
-        n = n.replace('ى', 'ي');
-        n = n.replaceAll("[ًٌٍَُِّْـ]", "");
-        n = n.replaceAll("[^\\p{L}\\p{N}]+", " ");
-        return n.replaceAll("\\s+", " ").trim();
+        if (value == null) return "";
+        String s = value.toLowerCase(Locale.ROOT);
+        s = s.replaceAll("[ًٌٍَُِّْـ]", "");
+        s = s.replaceAll("[\\p{Punct}\\p{S}،؛؟]+", " ");
+        s = s.replaceAll("\\s+", " ").trim();
+
+        StringBuilder out = new StringBuilder();
+        for (String token : s.split("\\s+")) {
+            if (token.isEmpty()) continue;
+            String t = token;
+            if (t.startsWith("ال") && t.length() > 4) t = t.substring(2);
+            if (t.endsWith("ية") && t.length() > 3) {
+                t = t.substring(0, t.length() - 2) + "يا";
+            }
+            if (out.length() > 0) out.append(' ');
+            out.append(t);
+        }
+        return out.toString();
     }
 }

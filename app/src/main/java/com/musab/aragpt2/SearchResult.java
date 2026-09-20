@@ -27,16 +27,11 @@ public final class SearchResult {
         return new SearchResult(title, url, snippet, host, score);
     }
 
-    static String safeHost(String value) {
-        String u = clean(value);
-        if (u.isEmpty()) return "";
+    private static String safeHost(String value) {
+        String raw = clean(value);
+        if (raw.isEmpty()) return "";
         try {
-            URI uri = URI.create(u);
-            String scheme = uri.getScheme();
-            if (scheme == null ||
-                    (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
-                return "";
-            }
+            URI uri = URI.create(raw);
             String h = uri.getHost();
             if (h == null) return "";
             h = h.toLowerCase(Locale.ROOT);
