@@ -1,0 +1,96 @@
+name: H33 All-In-One Comparison
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [comparison-all]
+    paths:
+      - 'benchmarks/h33_all_comparison.py'
+      - 'benchmarks/mlkit-android/**'
+      - '.github/workflows/h33-all-comparison.yml'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install comparison dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1"
+          pip install "transformers==5.14.1" "datasets>=4,<5" "huggingface-hub>=1.5,<2" "numpy<2" sentencepiece sacrebleu
+
+      - name: Prepare one fixed parallel benchmark
+        env:
+          HF_HUB_DISABLE_XET: '1'
+        run: |
+          mkdir -p artifacts/h33-all-comparison
+          mkdir -p benchmarks/mlkit-android/app/src/androidTest/assets
+          python benchmarks/h33_all_comparison.py prepare \
+            --per-domain 2 \
+            --out artifacts/h33-all-comparison/benchmark_input.json
+          cp artifacts/h33-all-comparison/benchmark_input.json \
+            benchmarks/mlkit-android/app/src/androidTest/assets/benchmark_input.json
+
+      - name: Real ML Kit Arabic to English and round-trip translation
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            gradle -p benchmarks/mlkit-android :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+            adb install -r benchmarks/mlkit-android/app/build/outputs/apk/debug/app-debug.apk
+            adb install -r benchmarks/mlkit-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w -r com.musab.h33bench.test/androidx.test.runner.AndroidJUnitRunner | tee artifacts/h33-all-comparison/mlkit_instrumentation.log
+            adb shell pm path com.musab.h33bench
+            adb exec-out run-as com.musab.h33bench cat files/mlkit_translation_results.json > artifacts/h33-all-comparison/mlkit_translation_results.json
+            test -s artifacts/h33-all-comparison/mlkit_translation_results.json
+
+      - name: Compare every path with the same Qwen checkpoint
+        env:
+          TOKENIZERS_PARALLELISM: 'false'
+          HF_HUB_DISABLE_XET: '1'
+        run: |
+          set -o pipefail
+          python benchmarks/h33_all_comparison.py evaluate \
+            --input artifacts/h33-all-comparison/benchmark_input.json \
+            --translations artifacts/h33-all-comparison/mlkit_translation_results.json \
+            --outdir artifacts/h33-all-comparison \
+            | tee artifacts/h33-all-comparison/evaluation.log
+
+      - name: Show final comparison
+        if: always()
+        run: |
+          if [ -f artifacts/h33-all-comparison/summary.md ]; then
+            cat artifacts/h33-all-comparison/summary.md
+          fi
+
+      - name: Upload all evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: H33-All-In-One-Comparison
+          path: artifacts/h33-all-comparison/
+          retention-days: 14
