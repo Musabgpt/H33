@@ -182,7 +182,7 @@ public final class WebSearchClient {
             XmlPullParser parser = Xml.newPullParser();
             parser.setInput(in, "UTF-8");
 
-            List<Result> results = new ArrayList<>();
+            List<SearchResult> results = new ArrayList<>();
             String currentTag = null;
             String title = "", link = "", description = "";
             boolean inItem = false;
@@ -204,7 +204,7 @@ public final class WebSearchClient {
                     String name = parser.getName();
                     if ("item".equalsIgnoreCase(name) && inItem) {
                         if (!title.trim().isEmpty() || !description.trim().isEmpty()) {
-                            results.add(new Result(
+                            results.add(new SearchResult(
                                     clean(title),
                                     cleanUrl(link),
                                     truncate(clean(description), 420)
@@ -231,14 +231,14 @@ public final class WebSearchClient {
         try {
             String json = readLimited(conn.getInputStream(), 180_000);
             JSONObject root = new JSONObject(json);
-            List<Result> results = new ArrayList<>();
+            List<SearchResult> results = new ArrayList<>();
 
             String abstractText = root.optString("AbstractText", "").trim();
             String abstractUrl = root.optString("AbstractURL", "").trim();
             String heading = root.optString("Heading", "").trim();
 
             if (!abstractText.isEmpty()) {
-                results.add(new Result(
+                results.add(new SearchResult(
                         heading.isEmpty() ? "نتيجة مباشرة" : heading,
                         abstractUrl,
                         truncate(abstractText, 500)
@@ -267,7 +267,7 @@ public final class WebSearchClient {
             String text = item.optString("Text", "").trim();
             String url = item.optString("FirstURL", "").trim();
             if (!text.isEmpty()) {
-                out.add(new Result("نتيجة ويب", url, truncate(text, 420)));
+                out.add(new SearchResult("نتيجة ويب", url, truncate(text, 420)));
             }
         }
     }
