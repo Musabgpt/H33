@@ -5,6 +5,7 @@ from pathlib import Path
 from training.export_mobile_int4 import (
     build_builder_command,
     require_passing_evaluation,
+    require_original_weight_update,
 )
 
 
@@ -45,6 +46,25 @@ class ExportMobileInt4Test(unittest.TestCase):
         self.assertIn("/tmp/h33-int4", joined)
         self.assertIn("int4", joined)
         self.assertIn("hf_remote=false", joined)
+
+    def test_mobile_export_requires_proof_original_weights_changed(self):
+        self.assertTrue(
+            require_original_weight_update(
+                {
+                    "optimizer_steps": 4,
+                    "original_weights_changed": True,
+                }
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "original Qwen weights"):
+            require_original_weight_update(
+                {
+                    "optimizer_steps": 4,
+                    "original_weights_changed": False,
+                }
+            )
+
 
 
 if __name__ == "__main__":
