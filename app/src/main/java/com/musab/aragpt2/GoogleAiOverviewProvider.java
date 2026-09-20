@@ -186,6 +186,8 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
         settings.setBlockNetworkImage(true);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setSupportMultipleWindows(false);
+        settings.setUserAgentString(
+                chromeLikeUserAgent(WebSettings.getDefaultUserAgent(activity)));
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
@@ -274,6 +276,18 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
             }
         }
         latch.countDown();
+    }
+
+    static String chromeLikeUserAgent(String value) {
+        String ua = clean(value);
+        if (ua.isEmpty()) return ua;
+
+        ua = ua.replace("; wv)", ")");
+        ua = ua.replace("; wv;", ";");
+        ua = ua.replace(" wv)", ")");
+        ua = ua.replace("Version/4.0 ", "");
+        ua = ua.replaceAll("\\s{2,}", " ").trim();
+        return ua;
     }
 
     private static String encode(String value) {
