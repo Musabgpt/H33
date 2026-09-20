@@ -31,7 +31,7 @@ jobs:
           pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1"
           pip install "transformers==5.14.1" "datasets>=4,<5" "huggingface-hub>=1.5,<2" "numpy<2" sentencepiece
 
-      - name: Run real Qwen2.5-0.5B benchmark
+      - name: Reproduce benchmark encoding contract\n        run: |\n          cd benchmarks\n          python -m unittest -v test_h33_bilingual_benchmark.py\n\n      - name: Run real Qwen2.5-0.5B benchmark
         env:
           TOKENIZERS_PARALLELISM: 'false'
           HF_HUB_DISABLE_XET: '1'
