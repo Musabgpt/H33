@@ -201,7 +201,7 @@ Expected: PASS.
 
 - [ ] **Step 7: Add the review-focus mixed-language test**
 
-Add a test where the Arabic query contains `سوريا` and an English result snippet contains `Syria`; assert it is accepted only if at least one normalized entity token can be matched. If transliteration is not implemented, include `سوريا / Syria` in the seeded snippet so the behavior is explicit and deterministic.
+Add this deterministic bilingual test: query `من هو رئيس سوريا الحالي؟`; result title `Syria president official`; snippet `معلومات عن رئيس سوريا الحالي / current Syria president`. Assert the result is accepted because the Arabic entity token `سوريا` is present in the evidence. Add a second English-only result with no Arabic overlap and assert it is rejected in phase 1; cross-language transliteration is explicitly outside this first quality-gate implementation.
 
 - [ ] **Step 8: Commit**
 
@@ -487,7 +487,7 @@ git commit -m "feat: add three-candidate answer orchestration"
 - Create: `app/src/main/java/com/musab/aragpt2/PreferenceRecord.java`
 - Create: `app/src/main/java/com/musab/aragpt2/PreferenceStore.java`
 - Create: `app/src/test/java/com/musab/aragpt2/PreferenceRecordTest.java`
-- Modify: `app/build.gradle.kts` only if local JVM tests require an `org.json` implementation.
+- Modify: `app/build.gradle.kts` to add `testImplementation("org.json:json:20250517")` so JSON serialization tests run on the local JVM.
 
 **Interfaces:**
 - Produces: `recordSelection(CandidateSet, String candidateId)`, `recordCorrection(CandidateSet, String correction)`, `latestDecision(String turnId)`.
@@ -525,7 +525,7 @@ Serialize one event per line.
 
 - [ ] **Step 4: Implement `PreferenceStore`**
 
-File: `h33_preferences_v1.jsonl` under `context.getFilesDir()`.
+Production constructor: `PreferenceStore(Context context)` stores `h33_preferences_v1.jsonl` under `context.getFilesDir()`. Add package-private `PreferenceStore(File file)` for deterministic JVM tests using a temporary directory.
 
 Each append must write one complete line, flush, and `getFD().sync()`. Reads parse line-by-line and skip only malformed lines instead of discarding the whole file.
 
@@ -705,7 +705,7 @@ git commit -m "feat: export H33 SFT and preference datasets"
 
 **Files:**
 - Modify: `.github/workflows/build-apk.yml`
-- Create: `scripts/web_quality_smoke.py` only if Java unit tests cannot express a CI-specific network assertion; otherwise keep deterministic filtering in Gradle tests.
+- No new script is required: keep the connectivity smoke inline in `.github/workflows/build-apk.yml`; deterministic quality belongs to Java unit tests.
 
 **Interfaces:**
 - Consumes: all tests from Tasks 1–7.
@@ -763,7 +763,7 @@ Capture at minimum `dumpsys meminfo` after one three-candidate turn and `gfxinfo
 - [ ] **Step 7: Commit CI changes**
 
 ```bash
-git add .github/workflows/build-apk.yml scripts/web_quality_smoke.py
+git add .github/workflows/build-apk.yml
 git commit -m "ci: verify H33 candidate and web quality behavior"
 ```
 
