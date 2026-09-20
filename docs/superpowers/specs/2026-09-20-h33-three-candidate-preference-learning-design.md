@@ -328,7 +328,7 @@ Before training work starts:
 - sync it with the latest validated `qwen2.5-mobile`;
 - keep the stable mobile branch untouched by experimental training code;
 - define a reproducible baseline evaluation set;
-- train only a controlled subset/adapter strategy first;
+- train a controlled subset of the original Qwen weights first (for example, selected final transformer blocks); if LoRA/adapter experiments are tried separately, they must be labeled separately and must never be presented as modification of the base Qwen weights;
 - compare before/after quality and regression behavior;
 - only export a new INT4 mobile model after evaluation passes.
 
