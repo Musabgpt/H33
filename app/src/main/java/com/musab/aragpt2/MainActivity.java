@@ -799,21 +799,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showGoogleInteractionDialog(String question) {
         final WebView webView = new WebView(this);
-        WebSettings settings = webView.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setJavaScriptCanOpenWindowsAutomatically(false);
-        settings.setSupportMultipleWindows(false);
-        settings.setUserAgentString(
-                GoogleAiOverviewProvider.chromeLikeUserAgent(
-                        WebSettings.getDefaultUserAgent(this)));
-
-        CookieManager cookieManager = CookieManager.getInstance();
-        cookieManager.setAcceptCookie(true);
-        cookieManager.setAcceptThirdPartyCookies(webView, false);
+        GoogleAiOverviewProvider.configureSearchWebView(webView, this);
 
         TextView help = new TextView(this);
         help.setText("هذه صفحة Google داخل H33. وافق أو أكمل التحقق يدويًا، "
