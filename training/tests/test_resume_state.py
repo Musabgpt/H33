@@ -6,6 +6,7 @@ from training.train_partial_sft import (
     cursor_after_optimizer_step,
     optimizer_step_groups,
     optimizer_limit_reached,
+    weight_change_evidence,
 )
 
 
@@ -121,6 +122,37 @@ class ResumeStateTest(unittest.TestCase):
         self.assertTrue(optimizer_limit_reached(11, 10))
         self.assertFalse(optimizer_limit_reached(9, 10))
         self.assertFalse(optimizer_limit_reached(999, 0))
+
+
+    def test_weight_change_evidence_requires_real_parameter_change(self):
+        self.assertTrue(
+            weight_change_evidence(
+                initial_fingerprint="aaa",
+                final_fingerprint="bbb",
+                starting_global_step=0,
+                ending_global_step=1,
+                prior_changed=False,
+            )
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "did not change"):
+            weight_change_evidence(
+                initial_fingerprint="aaa",
+                final_fingerprint="aaa",
+                starting_global_step=0,
+                ending_global_step=1,
+                prior_changed=False,
+            )
+
+        self.assertTrue(
+            weight_change_evidence(
+                initial_fingerprint="same",
+                final_fingerprint="same",
+                starting_global_step=4,
+                ending_global_step=4,
+                prior_changed=True,
+            )
+        )
 
 
 
