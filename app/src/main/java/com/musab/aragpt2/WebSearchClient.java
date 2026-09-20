@@ -15,6 +15,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -35,12 +36,21 @@ public final class WebSearchClient {
         public final String sources;
         public final int sourceCount;
         public final boolean directUrl;
+        public final List<SearchResult> results;
 
         WebPayload(String context, String sources, int sourceCount, boolean directUrl) {
+            this(context, sources, sourceCount, directUrl, Collections.emptyList());
+        }
+
+        WebPayload(String context, String sources, int sourceCount, boolean directUrl,
+                   List<SearchResult> results) {
             this.context = context == null ? "" : context;
             this.sources = sources == null ? "" : sources;
             this.sourceCount = sourceCount;
             this.directUrl = directUrl;
+            this.results = Collections.unmodifiableList(
+                    new ArrayList<>(results == null ? Collections.emptyList() : results)
+            );
         }
 
         public boolean isUsable() {
@@ -167,7 +177,15 @@ public final class WebSearchClient {
             String context = "[1] " + title + "\nURL: " + urlText + "\n" + text;
             String sources = "[1] " + title + "\n" + urlText;
 
-            return new WebPayload(context.trim(), sources.trim(), 1, true);
+            SearchResult directResult =
+                    new SearchResult(title, urlText, text);
+            return new WebPayload(
+                    context.trim(),
+                    sources.trim(),
+                    1,
+                    true,
+                    Collections.singletonList(directResult)
+            );
         } finally {
             conn.disconnect();
         }
@@ -299,7 +317,8 @@ public final class WebSearchClient {
                 context.toString().trim(),
                 sources.toString().trim(),
                 count,
-                direct
+                direct,
+                results
         );
     }
 
