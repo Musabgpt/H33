@@ -23,17 +23,11 @@ public final class SearchQueryPlanner {
 
     private SearchQueryPlanner() {}
 
-    public static SearchQueryPlan plan(String original, String englishTranslation) {
+    public static SearchQueryPlan plan(String original) {
         String originalClean = clean(original);
-        String englishClean = clean(englishTranslation);
-
-        if (englishClean.equalsIgnoreCase(originalClean)) englishClean = "";
-
         return new SearchQueryPlan(
                 originalClean,
-                focused(originalClean),
-                englishClean,
-                focused(englishClean)
+                focused(originalClean)
         );
     }
 
