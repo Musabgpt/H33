@@ -9,6 +9,7 @@ matrix, so the tied head/embedding tensor remains frozen.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -111,6 +112,18 @@ def optimizer_step_groups(
     return groups
 
 
+def optimizer_limit_reached(
+    global_step: int,
+    max_optimizer_steps: int,
+) -> bool:
+    if global_step < 0 or max_optimizer_steps < 0:
+        raise ValueError("optimizer step limits must be non-negative")
+    return bool(
+        max_optimizer_steps
+        and global_step >= max_optimizer_steps
+    )
+
+
 def _atomic_write_json(path: Path, value: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -132,6 +145,7 @@ def save_optimizer_checkpoint(
     optimizer,
     scheduler,
     torch,
+    metadata: dict | None = None,
 ) -> Path:
     """Publish a complete checkpoint only after an optimizer boundary."""
     if cursor.global_step <= 0:
@@ -171,6 +185,7 @@ def save_optimizer_checkpoint(
         manifest = {
             "schema_version": 1,
             "cursor": cursor.to_dict(),
+            "metadata": dict(metadata or {}),
         }
         _atomic_write_json(tmp_dir / "trainer_state.json", manifest)
 
@@ -193,13 +208,73 @@ def save_optimizer_checkpoint(
         raise
 
 
-def read_checkpoint_cursor(checkpoint_dir: Path) -> ResumeCursor:
+def read_checkpoint_manifest(checkpoint_dir: Path) -> dict:
     path = Path(checkpoint_dir) / "trainer_state.json"
     with path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
     if int(manifest.get("schema_version", 0)) != 1:
         raise ValueError("unsupported checkpoint schema")
+    return manifest
+
+
+def read_checkpoint_cursor(checkpoint_dir: Path) -> ResumeCursor:
+    manifest = read_checkpoint_manifest(checkpoint_dir)
     return ResumeCursor.from_dict(manifest.get("cursor"))
+
+
+def read_checkpoint_metadata(checkpoint_dir: Path) -> dict:
+    manifest = read_checkpoint_manifest(checkpoint_dir)
+    metadata = manifest.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("checkpoint metadata must be an object")
+    return dict(metadata)
+
+
+def validate_resume_metadata(
+    checkpoint_dir: Path,
+    expected_metadata: dict,
+) -> None:
+    actual = read_checkpoint_metadata(checkpoint_dir)
+    expected = dict(expected_metadata or {})
+
+    if not actual:
+        raise ValueError("checkpoint metadata is missing")
+
+    mismatches = []
+    for key, expected_value in expected.items():
+        actual_value = actual.get(key, None)
+        if actual_value != expected_value:
+            mismatches.append(
+                f"{key}: checkpoint={actual_value!r} current={expected_value!r}"
+            )
+
+    if mismatches:
+        raise ValueError(
+            "resume metadata mismatch: " + "; ".join(mismatches)
+        )
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_training_fingerprint(args) -> dict:
+    return {
+        "dataset_sha256": file_sha256(args.train_sft),
+        "base_model": str(args.base_model),
+        "seed": int(args.seed),
+        "last_n_blocks": int(args.last_n_blocks),
+        "max_trainable_ratio": float(args.max_trainable_ratio),
+        "max_length": int(args.max_length),
+        "learning_rate": float(args.learning_rate),
+        "weight_decay": float(args.weight_decay),
+        "max_grad_norm": float(args.max_grad_norm),
+        "gradient_accumulation_steps": int(args.gradient_accumulation_steps),
+    }
 
 
 def restore_optimizer_checkpoint(
