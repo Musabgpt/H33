@@ -48,8 +48,13 @@ def encode_chat(tokenizer, prompt: str) -> torch.Tensor:
         add_generation_prompt=True,
         return_tensors="pt",
     )
-    if isinstance(ids, dict):
-        ids = ids["input_ids"]
+    if not isinstance(ids, torch.Tensor):
+        try:
+            ids = ids["input_ids"]
+        except (KeyError, TypeError):
+            pass
+    if not isinstance(ids, torch.Tensor):
+        raise TypeError(f"chat template returned {type(ids).__name__}, expected input_ids Tensor")
     return ids
 
 
