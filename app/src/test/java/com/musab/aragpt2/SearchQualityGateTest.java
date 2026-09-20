@@ -90,4 +90,42 @@ public class SearchQualityGateTest {
         assertEquals(1, result.rejected.size());
     }
 
+    @Test
+    public void rejectsEnglishInterrogativeNoiseWithoutTopicMatch() {
+        List<SearchResult> raw = Arrays.asList(
+                new SearchResult(
+                        "What does many mean?",
+                        "https://dictionary.example/many",
+                        "How many are there? Definition, examples, and usage of many."
+                )
+        );
+
+        SearchQualityGate.Result result =
+                SearchQualityGate.filter(
+                        "How many continents are there in the world and what are their names?",
+                        raw,
+                        5
+                );
+
+        assertTrue(result.accepted.isEmpty());
+        assertEquals(1, result.rejected.size());
+    }
+
+    @Test
+    public void rejectsArabicInterrogativeNoiseWithoutContinentMatch() {
+        List<SearchResult> raw = Arrays.asList(
+                new SearchResult(
+                        "كم عدد الكلمات في العالم؟",
+                        "https://language.example/count",
+                        "شرح عن عدد الكلمات المستخدمة في العالم"
+                )
+        );
+
+        SearchQualityGate.Result result =
+                SearchQualityGate.filter("كم عدد قارات العالم وماهي أسماؤها؟", raw, 5);
+
+        assertTrue(result.accepted.isEmpty());
+        assertEquals(1, result.rejected.size());
+    }
+
 }
