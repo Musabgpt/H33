@@ -172,11 +172,10 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
         if (hl.isEmpty()) hl = "ar";
         if (gl.isEmpty()) gl = "GB";
 
-        String encoded = URLEncoder.encode(
-                q, StandardCharsets.UTF_8).replace("+", "%20");
+        String encoded = encode(q);
         return "https://www.google.com/search?q=" + encoded
-                + "&hl=" + Uri.encode(hl)
-                + "&gl=" + Uri.encode(gl);
+                + "&hl=" + encode(hl)
+                + "&gl=" + encode(gl);
     }
 
     private void configure(WebView webView) {
@@ -277,6 +276,16 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
             }
         }
         latch.countDown();
+    }
+
+    private static String encode(String value) {
+        try {
+            return URLEncoder.encode(
+                    clean(value), StandardCharsets.UTF_8.name())
+                    .replace("+", "%20");
+        } catch (Exception ex) {
+            throw new IllegalStateException("تعذر ترميز رابط Google", ex);
+        }
     }
 
     private static boolean isBlockedGooglePage(String value) {
