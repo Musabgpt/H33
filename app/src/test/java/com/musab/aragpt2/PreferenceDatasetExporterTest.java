@@ -47,7 +47,7 @@ public class PreferenceDatasetExporterTest {
                 "صحح هذا",
                 available("local", AnswerCandidate.Kind.LOCAL, "qwen", "أ"),
                 available("web", AnswerCandidate.Kind.WEB, "web-evidence", "ب"),
-                available("hosted", AnswerCandidate.Kind.HOSTED, "gemini", "ج")
+                available("hosted", AnswerCandidate.Kind.HOSTED, "google-ai-overview", "ج")
         );
         PreferenceRecord record =
                 PreferenceRecord.correction(set, "هذا هو الجواب الصحيح", 200L);
