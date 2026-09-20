@@ -9,6 +9,8 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.SystemClock;
+import android.text.method.LinkMovementMethod;
+import android.text.util.Linkify;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -399,6 +401,9 @@ public class MainActivity extends AppCompatActivity {
             }
             sources.setText(text.toString());
             sources.setTextSize(12f);
+            sources.setAutoLinkMask(Linkify.WEB_URLS);
+            sources.setLinksClickable(true);
+            sources.setMovementMethod(LinkMovementMethod.getInstance());
             sources.setTextIsSelectable(true);
             sources.setPadding(dp(6), dp(8), dp(6), dp(4));
             card.addView(sources);
