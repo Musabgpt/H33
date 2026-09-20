@@ -28,6 +28,13 @@ public final class CandidateCoordinator {
 
         String turnId = UUID.randomUUID().toString();
 
+        FutureTask<AnswerCandidate> hostedTask =
+                new FutureTask<>(() -> resolveHosted(q));
+        Thread hostedThread =
+                new Thread(hostedTask, "h33-hosted-candidate");
+        hostedThread.setDaemon(true);
+        hostedThread.start();
+
         AnswerCandidate local;
         try {
             local = localProvider.answer(q, localListener);
@@ -37,13 +44,6 @@ public final class CandidateCoordinator {
         } catch (Exception ex) {
             local = unavailableLocal(statusFrom(ex, "فشل الجواب المحلي"));
         }
-
-        FutureTask<AnswerCandidate> hostedTask =
-                new FutureTask<>(() -> resolveHosted(q));
-        Thread hostedThread =
-                new Thread(hostedTask, "h33-hosted-candidate");
-        hostedThread.setDaemon(true);
-        hostedThread.start();
 
         AnswerCandidate web = resolveWeb(q);
 
