@@ -88,6 +88,29 @@ def cursor_after_optimizer_step(
     )
 
 
+def optimizer_step_groups(
+    *,
+    order_length: int,
+    start_offset: int,
+    gradient_accumulation_steps: int,
+) -> list[tuple[int, int]]:
+    """Return [start, end) example-position groups for exact optimizer steps."""
+    if order_length <= 0:
+        raise ValueError("order_length must be positive")
+    if gradient_accumulation_steps <= 0:
+        raise ValueError("gradient_accumulation_steps must be positive")
+    if start_offset < 0 or start_offset > order_length:
+        raise ValueError("start_offset outside order")
+
+    groups = []
+    position = start_offset
+    while position < order_length:
+        end = min(order_length, position + gradient_accumulation_steps)
+        groups.append((position, end))
+        position = end
+    return groups
+
+
 def _atomic_write_json(path: Path, value: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
