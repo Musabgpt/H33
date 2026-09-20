@@ -72,9 +72,11 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
                 ViewGroup root =
                         (ViewGroup) activity.findViewById(android.R.id.content);
                 ViewGroup.LayoutParams params =
-                        new ViewGroup.LayoutParams(2, 2);
+                        new ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT);
                 root.addView(webView, params);
-                webView.setAlpha(0.01f);
+                webView.setVisibility(android.view.View.INVISIBLE);
 
                 long deadline = android.os.SystemClock.uptimeMillis()
                         + OVERALL_TIMEOUT_MS;
@@ -90,11 +92,7 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
                             WebView view, WebResourceRequest request) {
                         Uri target = request.getUrl();
                         String host = target == null ? "" : clean(target.getHost());
-                        if (host.endsWith("google.com")
-                                || host.endsWith("google.co.uk")) {
-                            return false;
-                        }
-                        return true;
+                        return !isAllowedGoogleHost(host);
                     }
 
                     @Override
@@ -286,6 +284,14 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
         } catch (Exception ex) {
             throw new IllegalStateException("تعذر ترميز رابط Google", ex);
         }
+    }
+
+    static boolean isAllowedGoogleHost(String value) {
+        String host = clean(value).toLowerCase(java.util.Locale.ROOT);
+        return host.equals("google.com")
+                || host.endsWith(".google.com")
+                || host.equals("google.co.uk")
+                || host.endsWith(".google.co.uk");
     }
 
     private static boolean isBlockedGooglePage(String value) {
