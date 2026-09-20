@@ -560,6 +560,8 @@ def run_training(args) -> int:
     if args.checkpoint_every_steps < 0:
         raise ValueError("checkpoint_every_steps must be non-negative")
 
+    training_fingerprint = build_training_fingerprint(args)
+
     _seed_everything(args.seed, torch)
 
     has_cuda = bool(torch.cuda.is_available())
@@ -586,6 +588,7 @@ def run_training(args) -> int:
     )
     model_source = args.base_model
     if resume_dir is not None:
+        validate_resume_metadata(resume_dir, training_fingerprint)
         checkpoint_model = resume_dir / "model"
         if not checkpoint_model.is_dir():
             raise FileNotFoundError(
@@ -653,8 +656,13 @@ def run_training(args) -> int:
             f"resume epoch {cursor.epoch} exceeds configured epochs {args.epochs}"
         )
 
-    stop_training = False
+    stop_training = optimizer_limit_reached(
+        global_step,
+        args.max_optimizer_steps,
+    )
     for epoch in range(cursor.epoch, args.epochs):
+        if stop_training:
+            break
         order = build_epoch_order(len(examples), args.seed, epoch)
         start_offset = (
             cursor.next_order_offset
@@ -727,9 +735,9 @@ def run_training(args) -> int:
                 )
             )
 
-            reached_limit = bool(
-                args.max_optimizer_steps
-                and global_step >= args.max_optimizer_steps
+            reached_limit = optimizer_limit_reached(
+                global_step,
+                args.max_optimizer_steps,
             )
             periodic_checkpoint = bool(
                 args.checkpoint_every_steps
@@ -745,6 +753,7 @@ def run_training(args) -> int:
                     optimizer=optimizer,
                     scheduler=scheduler,
                     torch=torch,
+                    metadata=training_fingerprint,
                 )
 
             if reached_limit:
@@ -771,6 +780,7 @@ def run_training(args) -> int:
         "optimizer_steps": global_step,
         "cursor": cursor.to_dict(),
         "checkpoint_every_steps": args.checkpoint_every_steps,
+        "training_fingerprint": training_fingerprint,
         "trainable_selection": report,
         "output": str(final_dir),
     }
