@@ -59,4 +59,15 @@ public class ConversationHistoryTest {
         assertEquals("assistant", turns.get(1).role);
     }
 
+    @Test
+    public void answerForTurnReturnsCurrentCanonicalAnswer() {
+        ConversationHistory h = new ConversationHistory(16);
+        h.appendTurn("t1", "سؤال", "جواب أول");
+        assertEquals("جواب أول", h.answerForTurn("t1"));
+
+        assertTrue(h.replaceAnswer("t1", "جواب ثان"));
+        assertEquals("جواب ثان", h.answerForTurn("t1"));
+        assertEquals("", h.answerForTurn("missing"));
+    }
+
 }
