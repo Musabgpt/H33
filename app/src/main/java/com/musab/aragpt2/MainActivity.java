@@ -82,7 +82,7 @@ public class MainActivity extends AppCompatActivity {
                 candidateCoordinator = new CandidateCoordinator(
                         new QwenLocalAnswerProvider(engine, 192),
                         new QwenWebEvidenceAnswerProvider(engine, 5, 192),
-                        new UnavailableHostedAnswerProvider(),
+                        new GoogleAiOverviewProvider(this),
                         engine::commitCanonicalTurn
                 );
 
@@ -312,7 +312,7 @@ public class MainActivity extends AppCompatActivity {
                 state, chooseButtons, selectedStatus, decisionBusy);
         addCandidateCard(block, set, set.web, "جواب البحث",
                 state, chooseButtons, selectedStatus, decisionBusy);
-        addCandidateCard(block, set, set.hosted, "جواب نموذج المتصفح",
+        addCandidateCard(block, set, set.hosted, "Google AI Overview",
                 state, chooseButtons, selectedStatus, decisionBusy);
 
         Button correction = smallButton("كلهم خطأ — سأكتب التصحيح");
