@@ -12,7 +12,7 @@ For each question, H33 will produce up to three clearly separated candidate answ
 
 1. **H33 Local** — Qwen2.5-0.5B-Instruct running locally without web evidence.
 2. **Web Evidence Answer** — a separate answer produced only from filtered, relevant web evidence.
-3. **Browser/Hosted Model Answer** — an answer from an external model/search provider when an official supported provider is configured.
+3. **Google AI Overview Answer** — the exact AI Overview text rendered by the ordinary Google Search results page, when Google shows one for that query.
 
 The user is the final judge. They may choose any candidate as best, or reject all candidates and provide a correction.
 
@@ -25,7 +25,7 @@ A successful implementation must:
 - Show the three answer paths separately and label their provenance.
 - Never label a response as web-grounded unless usable relevant evidence exists.
 - Reject clearly irrelevant, adult, spam, duplicate, or low-relevance search results before they reach the answer generator.
-- Never fabricate a browser-model answer when the configured provider is unavailable.
+- Never fabricate a Google AI Overview when Google does not render one for the query.
 - Preserve current session memory and make the selected/corrected answer the canonical assistant turn.
 - Persist user preference records locally in a structured, exportable format.
 - Preserve the current TXT export, copy, correction, new-chat, streaming, and Fable behavior.
@@ -38,8 +38,8 @@ The first phase will not:
 
 - Update Qwen base weights on every tap.
 - Claim that storing a correction is equivalent to weight training.
-- Scrape private/authenticated browser UI pages to impersonate Google or Microsoft model output.
-- Hardcode API keys or credentials in the APK or repository.
+- Depend on a Gemini/Copilot API key for the third candidate.
+- Attempt to bypass Google consent, CAPTCHA, anti-bot checks, authentication, or other access controls.
 - Replace Qwen INT4 inference with a training runtime.
 - Automatically publish user feedback to a remote service.
 
@@ -118,28 +118,25 @@ Its prompt must explicitly instruct the generator:
 
 This path may reuse the local Qwen runtime for synthesis, but it is a separate evidence-constrained generation path and must not be presented as the same answer as H33 Local.
 
-### 4.4 Hosted/browser-model candidate
+### 4.4 Google AI Overview candidate
 
-Add a provider interface such as:
+Keep the third slot behind the existing `HostedAnswerProvider` interface for compatibility, but implement it as a Google Search page extractor rather than a model API.
 
-```java
-interface HostedAnswerProvider {
-    Availability availability();
-    HostedAnswer answer(String question) throws Exception;
-}
-```
-
-Initial implementation should support an official provider only when configured.
+The provider loads a normal Google Search results URL inside an Android `WebView`, waits for dynamic rendering, and reads the rendered AI Overview block with `WebView.evaluateJavascript()`.
 
 Provider rules:
 
-- Never scrape or parse changing consumer UI pages as the primary integration.
-- Never claim "Google", "Microsoft", "Copilot", "Gemini", or another provider unless the returned answer actually came from that configured provider.
-- If no provider is configured, return a structured `UNAVAILABLE` state.
-- Provider errors must not break H33 Local or Web Evidence candidates.
-- Credentials must be supplied through a safe configuration path, not committed to Git.
+- The answer text shown in H33 must be the text extracted from Google's rendered AI Overview; H33 must not rewrite, summarize, or regenerate it.
+- Extract source links from the same AI Overview container and keep them attached to the candidate.
+- Detect Arabic and English overview labels, including `نبذة باستخدام الذكاء الاصطناعي` and `AI Overview`.
+- If Google does not render an AI Overview within the bounded wait window, return a structured `UNAVAILABLE` candidate.
+- Do not use `addJavascriptInterface` for untrusted Google page content; use `evaluateJavascript()` and a return-value callback only.
+- Do not attempt to bypass consent pages, CAPTCHA, authentication, rate limits, or other access controls.
+- Do not share Chrome cookies, passwords, or Google account credentials with H33.
+- Provider failures must not block H33 Local or Web Evidence candidates.
+- DOM selectors must use resilient text/structure heuristics rather than depending only on unstable generated CSS class names.
 
-Google-search-grounded Gemini is the preferred first hosted provider if a supported API configuration is available. Microsoft can be added behind the same interface later.
+Because Google decides when AI Overviews appear and Search results can vary by language, device, region, and personalization, this candidate is optional per query.
 
 ## 5. Search quality gate
 
@@ -188,7 +185,7 @@ Recommended card order:
 
 1. **H33 المحلي**
 2. **جواب البحث**
-3. **جواب نموذج المتصفح**
+3. **Google AI Overview**
 
 Each available card contains:
 
@@ -423,10 +420,10 @@ Phase C — preference persistence:
 - canonical conversation replacement;
 - dataset export.
 
-Phase D — hosted provider:
-- add one official provider implementation;
-- secure configuration;
-- graceful unavailable state.
+Phase D — Google AI Overview extractor:
+- load the ordinary Google Search result page in an isolated WebView;
+- extract the rendered AI Overview text and its links without rewriting;
+- return a graceful unavailable state when Google does not show one.
 
 Phase E — training:
 - sync `qwen-partial-train`;
@@ -439,16 +436,16 @@ Phase E — training:
 
 - Local model failure: show local candidate as unavailable; do not block independent external candidates.
 - Search failure: show web candidate unavailable; do not present local memory as web evidence.
-- Hosted provider failure: show hosted candidate unavailable; do not block other candidates.
+- Google AI Overview extraction failure: show the third candidate unavailable; do not block other candidates.
 - Persistence failure: do not claim a preference/correction was saved.
 - Training export failure: preserve original preference store and fail without mutating it.
 
 ## 14. Security and privacy
 
 - User questions, choices, and corrections remain local by default.
-- External providers receive only the data required for the specific external request.
-- Do not send local correction history to a hosted provider unless explicitly designed and disclosed later.
-- Never commit credentials.
+- Google receives only the current search query through its normal Search page request.
+- Do not send local correction history or preference data to Google.
+- Do not expose app-native methods to the Google page through a JavaScript bridge.
 - Validate URLs before fetching and restrict unsafe schemes.
 - Keep model/provider provenance visible to the user.
 
