@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import os
 import json
 
 import onnxruntime_genai as og
 
-MODEL_DIR = Path("app/src/main/assets/model")
+MODEL_DIR = Path(os.environ.get("H33_MODEL_DIR", "app/src/main/assets/model"))
 FABLE = Path("app/src/main/assets/fable_for_qwen_v1.txt")
 
 if not (MODEL_DIR / "genai_config.json").exists():
