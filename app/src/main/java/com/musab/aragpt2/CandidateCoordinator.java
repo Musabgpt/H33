@@ -5,30 +5,22 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 
 public final class CandidateCoordinator {
-    @FunctionalInterface
-    public interface CanonicalTurnStore {
-        void commit(String turnId, String question, String answer) throws Exception;
-    }
-
     private final LocalAnswerProvider localProvider;
     private final WebEvidenceAnswerProvider webProvider;
     private final HostedAnswerProvider hostedProvider;
-    private final CanonicalTurnStore turnStore;
 
     public CandidateCoordinator(
             LocalAnswerProvider localProvider,
             WebEvidenceAnswerProvider webProvider,
-            HostedAnswerProvider hostedProvider,
-            CanonicalTurnStore turnStore) {
+            HostedAnswerProvider hostedProvider) {
         this.localProvider = localProvider;
         this.webProvider = webProvider;
         this.hostedProvider = hostedProvider;
-        this.turnStore = turnStore;
     }
 
     public CandidateSet create(
             String question,
-            QwenEngine.StreamListener localListener) throws Exception {
+            LocalInferenceEngine.StreamListener localListener) throws Exception {
         String q = question == null ? "" : question.trim();
         if (q.isEmpty()) {
             throw new IllegalArgumentException("السؤال فارغ");
