@@ -3,7 +3,13 @@ name: Build H33 Qwen2.5 INT4 APK
 on:
   workflow_dispatch:
   push:
-    branches: [qwen2.5-mobile, h33-three-candidate-native]
+    branches: [qwen2.5-mobile]
+  pull_request:
+    branches: [qwen2.5-mobile]
+
+concurrency:
+  group: h33-qwen-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
