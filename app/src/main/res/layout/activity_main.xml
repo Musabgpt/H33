@@ -20,7 +20,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="H33 Qwen2.5"
+            android:text="H33 DeepSeek Coder"
             android:textStyle="bold"
             android:textSize="21sp"
             android:gravity="start" />
