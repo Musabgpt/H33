@@ -103,28 +103,41 @@ public final class WebSearchClient {
         String q = query == null ? "" : query.trim();
         if (q.isEmpty()) return new WebPayload("", "", 0, false);
 
-        List<Result> results = new ArrayList<>();
+        int rawLimit = Math.max(maxResults, Math.min(30, maxResults * 3));
+        List<SearchResult> results = new ArrayList<>();
 
         try {
-            results = searchBingRss(q, maxResults);
+            results = searchBingRss(q, rawLimit);
         } catch (Exception ignored) {
         }
 
-        if (results.isEmpty()) {
+        SearchQualityGate.Result quality =
+                SearchQualityGate.filter(q, results, maxResults);
+
+        if (quality.accepted.isEmpty()) {
             try {
-                results = searchDuckDuckGo(q, maxResults);
+                results = searchDuckDuckGo(q, rawLimit);
             } catch (Exception ignored) {
+                results = new ArrayList<>();
             }
+            quality = SearchQualityGate.filter(q, results, maxResults);
         }
 
-        if (results.isEmpty()) {
+        if (quality.accepted.isEmpty()) {
             return new WebPayload("", "", 0, false);
         }
 
-        return payloadFromResults(results, false);
+        return payloadFromAccepted(quality.accepted, false);
     }
 
     private static WebPayload fetchDirectUrl(String urlText) throws Exception {
+        SearchResult directCandidate = new SearchResult(urlText, urlText, urlText);
+        SearchQualityGate.Result directQuality = SearchQualityGate.filter(
+                urlText, java.util.Collections.singletonList(directCandidate), 1);
+        if (directQuality.accepted.isEmpty()) {
+            return new WebPayload("", "", 0, true);
+        }
+
         URL url = new URL(urlText);
         HttpURLConnection conn = open(url, "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5");
 
@@ -160,7 +173,7 @@ public final class WebSearchClient {
         }
     }
 
-    private static List<Result> searchBingRss(String query, int maxResults) throws Exception {
+    private static List<SearchResult> searchBingRss(String query, int maxResults) throws Exception {
         String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
         URL url = new URL("https://www.bing.com/search?q=" + encoded + "&format=rss&setlang=ar");
         HttpURLConnection conn = open(url, "application/rss+xml,application/xml,text/xml,*/*;q=0.5");
@@ -209,7 +222,7 @@ public final class WebSearchClient {
         }
     }
 
-    private static List<Result> searchDuckDuckGo(String query, int maxResults) throws Exception {
+    private static List<SearchResult> searchDuckDuckGo(String query, int maxResults) throws Exception {
         String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
         URL url = new URL("https://api.duckduckgo.com/?q=" + encoded +
                 "&format=json&no_html=1&no_redirect=1&skip_disambig=1");
@@ -240,7 +253,7 @@ public final class WebSearchClient {
         }
     }
 
-    private static void collectTopics(JSONArray topics, List<Result> out, int max) {
+    private static void collectTopics(JSONArray topics, List<SearchResult> out, int max) {
         for (int i = 0; i < topics.length() && out.size() < max; i++) {
             JSONObject item = topics.optJSONObject(i);
             if (item == null) continue;
@@ -259,12 +272,12 @@ public final class WebSearchClient {
         }
     }
 
-    private static WebPayload payloadFromResults(List<Result> results, boolean direct) {
+    static WebPayload payloadFromAccepted(List<SearchResult> results, boolean direct) {
         StringBuilder context = new StringBuilder();
         StringBuilder sources = new StringBuilder();
         int index = 1;
 
-        for (Result r : results) {
+        for (SearchResult r : results) {
             if (r.title.isEmpty() && r.snippet.isEmpty()) continue;
 
             context.append("[").append(index).append("] ")
@@ -401,15 +414,4 @@ public final class WebSearchClient {
         return s.substring(0, max) + "…";
     }
 
-    private static final class Result {
-        final String title;
-        final String url;
-        final String snippet;
-
-        Result(String title, String url, String snippet) {
-            this.title = title == null ? "" : title;
-            this.url = url == null ? "" : url;
-            this.snippet = snippet == null ? "" : snippet;
-        }
-    }
 }
