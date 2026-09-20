@@ -208,6 +208,16 @@ public final class QwenEngine implements AutoCloseable {
         return replaced;
     }
 
+    public String getCanonicalAnswer(String turnId) {
+        return conversation.answerForTurn(turnId);
+    }
+
+    public boolean removeCanonicalTurn(String turnId) throws Exception {
+        boolean removed = conversation.removeTurn(turnId);
+        if (removed) saveConversationLocked();
+        return removed;
+    }
+
     public String rememberCorrect(String question, String answer) throws Exception {
         memory.remember(question, answer, false);
         return "تم حفظ الإجابة الصحيحة";
