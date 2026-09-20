@@ -788,6 +788,19 @@ def run_training(args) -> int:
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
 
+            if not original_weights_changed:
+                current_fingerprint = parameter_fingerprint(
+                    model,
+                    trainable_only=True,
+                )
+                original_weights_changed = weight_change_evidence(
+                    initial_fingerprint=session_initial_fingerprint,
+                    final_fingerprint=current_fingerprint,
+                    starting_global_step=starting_global_step,
+                    ending_global_step=global_step,
+                    prior_changed=prior_original_weights_changed,
+                )
+
             cursor = cursor_after_optimizer_step(
                 global_step=global_step,
                 epoch=epoch,
@@ -829,7 +842,12 @@ def run_training(args) -> int:
                     optimizer=optimizer,
                     scheduler=scheduler,
                     torch=torch,
-                    metadata=training_fingerprint,
+                    metadata={
+                        **training_fingerprint,
+                        "original_weights_changed": bool(
+                            original_weights_changed
+                        ),
+                    },
                 )
 
             if reached_limit:
@@ -843,6 +861,18 @@ def run_training(args) -> int:
         if groups and cursor.epoch < epoch + 1:
             raise RuntimeError("resume cursor did not advance after completed epoch")
 
+    session_final_fingerprint = parameter_fingerprint(
+        model,
+        trainable_only=True,
+    )
+    original_weights_changed = weight_change_evidence(
+        initial_fingerprint=session_initial_fingerprint,
+        final_fingerprint=session_final_fingerprint,
+        starting_global_step=starting_global_step,
+        ending_global_step=global_step,
+        prior_changed=prior_original_weights_changed,
+    )
+
     final_dir = output_dir / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(final_dir)
@@ -854,7 +884,12 @@ def run_training(args) -> int:
         "resumed_from": str(resume_dir) if resume_dir is not None else None,
         "seed": args.seed,
         "optimizer_steps": global_step,
+        "starting_optimizer_step": starting_global_step,
+        "session_optimizer_steps": global_step - starting_global_step,
         "cursor": cursor.to_dict(),
+        "session_initial_trainable_fingerprint": session_initial_fingerprint,
+        "session_final_trainable_fingerprint": session_final_fingerprint,
+        "original_weights_changed": bool(original_weights_changed),
         "checkpoint_every_steps": args.checkpoint_every_steps,
         "training_fingerprint": training_fingerprint,
         "trainable_selection": report,
