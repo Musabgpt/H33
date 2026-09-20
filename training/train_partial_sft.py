@@ -12,12 +12,79 @@ import argparse
 import json
 import os
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 
 BASE_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_SEED = 3407
+
+
+@dataclass(frozen=True)
+class ResumeCursor:
+    global_step: int
+    epoch: int
+    next_order_offset: int
+
+    def __post_init__(self):
+        if self.global_step < 0 or self.epoch < 0 or self.next_order_offset < 0:
+            raise ValueError("resume cursor values must be non-negative")
+
+    def to_dict(self) -> dict:
+        return {
+            "global_step": int(self.global_step),
+            "epoch": int(self.epoch),
+            "next_order_offset": int(self.next_order_offset),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict) -> "ResumeCursor":
+        if not isinstance(value, dict):
+            raise ValueError("resume cursor must be an object")
+        return cls(
+            global_step=int(value.get("global_step", 0)),
+            epoch=int(value.get("epoch", 0)),
+            next_order_offset=int(value.get("next_order_offset", 0)),
+        )
+
+
+def build_epoch_order(example_count: int, seed: int, epoch: int) -> list[int]:
+    if example_count <= 0:
+        raise ValueError("example_count must be positive")
+    if epoch < 0:
+        raise ValueError("epoch must be non-negative")
+    order = list(range(example_count))
+    random.Random(int(seed) + int(epoch)).shuffle(order)
+    return order
+
+
+def cursor_after_optimizer_step(
+    *,
+    global_step: int,
+    epoch: int,
+    completed_order_offset: int,
+    order_length: int,
+) -> ResumeCursor:
+    if order_length <= 0:
+        raise ValueError("order_length must be positive")
+    if completed_order_offset < 0 or completed_order_offset >= order_length:
+        raise ValueError("completed_order_offset outside order")
+    if global_step < 0 or epoch < 0:
+        raise ValueError("global_step/epoch must be non-negative")
+
+    next_offset = completed_order_offset + 1
+    if next_offset >= order_length:
+        return ResumeCursor(
+            global_step=global_step,
+            epoch=epoch + 1,
+            next_order_offset=0,
+        )
+    return ResumeCursor(
+        global_step=global_step,
+        epoch=epoch,
+        next_order_offset=next_offset,
+    )
 
 
 def _unique_parameters(model) -> list:
