@@ -228,7 +228,7 @@ public class MainActivity extends AppCompatActivity {
 
         TextView loadingLabel = new TextView(this);
         loadingLabel.setText("H33 المحلي");
-        loadingLabel.setTextStyle(android.graphics.Typeface.BOLD);
+        loadingLabel.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
         loadingLabel.setTextSize(14f);
         loadingLabel.setPadding(dp(6), dp(4), dp(6), dp(4));
 
@@ -292,7 +292,7 @@ public class MainActivity extends AppCompatActivity {
 
         TextView heading = new TextView(this);
         heading.setText("قارن الإجابات واختر الأفضل");
-        heading.setTextStyle(android.graphics.Typeface.BOLD);
+        heading.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
         heading.setTextSize(15f);
         heading.setPadding(dp(6), dp(2), dp(6), dp(8));
         block.addView(heading);
@@ -358,7 +358,7 @@ public class MainActivity extends AppCompatActivity {
 
         TextView title = new TextView(this);
         title.setText(label);
-        title.setTextStyle(android.graphics.Typeface.BOLD);
+        title.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
         title.setTextSize(15f);
         card.addView(title);
 
