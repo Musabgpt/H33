@@ -4,7 +4,7 @@
 
 **Goal:** Train a controlled subset of the original Qwen2.5-0.5B-Instruct weights from H33's selected/corrected preference data, evaluate regression risk, and only then export a new INT4 mobile model.
 
-**Architecture:** Work only on `qwen-partial-train`, first syncing it to the validated mobile branch. Training starts from the original Hugging Face FP16 model, freezes the entire network, then unfreezes only the final two transformer blocks plus final norm and LM head; these are genuine original Qwen parameters, not an adapter. Use SFT first from the user's canonical answers. Add DPO only after there is enough preference data and baseline SFT is stable. Quantization happens after training/evaluation, never in-place on the INT4 runtime model.
+**Architecture:** Work only on `qwen-partial-train`, first syncing it to the validated mobile branch. Training starts from the original Hugging Face FP16 model, freezes the entire network, then unfreezes only the final two transformer blocks plus final norm; these are genuine original Qwen parameters, not an adapter. Qwen2.5-0.5B-Instruct has tied input/output embeddings, so the first experiment deliberately keeps the tied LM head / embedding matrix frozen instead of accidentally opening that large shared tensor. Use SFT first from the user's canonical answers. Add DPO only after there is enough preference data and baseline SFT is stable. Quantization happens after training/evaluation, never in-place on the INT4 runtime model.
 
 **Tech Stack:** Python, PyTorch, Hugging Face Transformers, Qwen/Qwen2.5-0.5B-Instruct, Kaggle GPU, ONNX Runtime GenAI builder for final INT4 export.
 
@@ -156,8 +156,9 @@ def select_trainable_parameters(model, last_n_blocks=2):
 
 Test with a tiny mock module hierarchy that only:
 - final 2 blocks,
-- final norm,
-- lm_head
+- final norm
+
+and that the tied `lm_head` / `embed_tokens` parameter stays frozen.
 
 are trainable.
 
@@ -188,8 +189,9 @@ for block in model.model.layers[-2:]:
 for p in model.model.norm.parameters():
     p.requires_grad = True
 
-for p in model.lm_head.parameters():
-    p.requires_grad = True
+# Qwen2.5-0.5B-Instruct ties lm_head.weight to embed_tokens.weight.
+# Keep both frozen in the first experiment so only the selected decoder
+# blocks + final norm change.
 ```
 
 Add a startup assertion:
@@ -198,7 +200,7 @@ Add a startup assertion:
 trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
 total = sum(p.numel() for p in model.parameters())
 ratio = trainable / total
-assert 0.0 < ratio < 0.35, f"unsafe trainable ratio: {ratio:.4f}"
+assert 0.0 < ratio < 0.20, f"unsafe trainable ratio: {ratio:.4f}"
 ```
 
 Print exact trainable parameter names and counts.

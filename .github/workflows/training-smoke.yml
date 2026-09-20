@@ -1,0 +1,24 @@
+name: H33 training smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [h33-partial-train-native]
+    paths:
+      - 'training/**'
+      - '.github/workflows/training-smoke.yml'
+
+jobs:
+  data-prep-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile all training Python
+        run: python -m compileall -q training
+
+      - name: Run training unit tests
+        run: python -m unittest discover -s training/tests -v

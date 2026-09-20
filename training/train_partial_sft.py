@@ -1,0 +1,932 @@
+#!/usr/bin/env python3
+"""Partial SFT for selected original Qwen2.5 weights.
+
+The first experiment intentionally trains only the final decoder blocks and
+final RMSNorm. Qwen2.5-0.5B-Instruct ties lm_head.weight to the input embedding
+matrix, so the tied head/embedding tensor remains frozen.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import random
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+
+BASE_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
+DEFAULT_SEED = 3407
+
+
+@dataclass(frozen=True)
+class ResumeCursor:
+    global_step: int
+    epoch: int
+    next_order_offset: int
+
+    def __post_init__(self):
+        if self.global_step < 0 or self.epoch < 0 or self.next_order_offset < 0:
+            raise ValueError("resume cursor values must be non-negative")
+
+    def to_dict(self) -> dict:
+        return {
+            "global_step": int(self.global_step),
+            "epoch": int(self.epoch),
+            "next_order_offset": int(self.next_order_offset),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict) -> "ResumeCursor":
+        if not isinstance(value, dict):
+            raise ValueError("resume cursor must be an object")
+        return cls(
+            global_step=int(value.get("global_step", 0)),
+            epoch=int(value.get("epoch", 0)),
+            next_order_offset=int(value.get("next_order_offset", 0)),
+        )
+
+
+def build_epoch_order(example_count: int, seed: int, epoch: int) -> list[int]:
+    if example_count <= 0:
+        raise ValueError("example_count must be positive")
+    if epoch < 0:
+        raise ValueError("epoch must be non-negative")
+    order = list(range(example_count))
+    random.Random(int(seed) + int(epoch)).shuffle(order)
+    return order
+
+
+def cursor_after_optimizer_step(
+    *,
+    global_step: int,
+    epoch: int,
+    completed_order_offset: int,
+    order_length: int,
+) -> ResumeCursor:
+    if order_length <= 0:
+        raise ValueError("order_length must be positive")
+    if completed_order_offset < 0 or completed_order_offset >= order_length:
+        raise ValueError("completed_order_offset outside order")
+    if global_step < 0 or epoch < 0:
+        raise ValueError("global_step/epoch must be non-negative")
+
+    next_offset = completed_order_offset + 1
+    if next_offset >= order_length:
+        return ResumeCursor(
+            global_step=global_step,
+            epoch=epoch + 1,
+            next_order_offset=0,
+        )
+    return ResumeCursor(
+        global_step=global_step,
+        epoch=epoch,
+        next_order_offset=next_offset,
+    )
+
+
+def optimizer_step_groups(
+    *,
+    order_length: int,
+    start_offset: int,
+    gradient_accumulation_steps: int,
+) -> list[tuple[int, int]]:
+    """Return [start, end) example-position groups for exact optimizer steps."""
+    if order_length <= 0:
+        raise ValueError("order_length must be positive")
+    if gradient_accumulation_steps <= 0:
+        raise ValueError("gradient_accumulation_steps must be positive")
+    if start_offset < 0 or start_offset > order_length:
+        raise ValueError("start_offset outside order")
+
+    groups = []
+    position = start_offset
+    while position < order_length:
+        end = min(order_length, position + gradient_accumulation_steps)
+        groups.append((position, end))
+        position = end
+    return groups
+
+
+def optimizer_limit_reached(
+    global_step: int,
+    max_optimizer_steps: int,
+) -> bool:
+    if global_step < 0 or max_optimizer_steps < 0:
+        raise ValueError("optimizer step limits must be non-negative")
+    return bool(
+        max_optimizer_steps
+        and global_step >= max_optimizer_steps
+    )
+
+
+def model_dtype_kwargs(transformers_version: str, dtype) -> dict:
+    match = __import__("re").match(r"^\s*(\d+)", str(transformers_version or ""))
+    if not match:
+        raise ValueError(
+            f"cannot parse Transformers version: {transformers_version!r}"
+        )
+    major = int(match.group(1))
+    if major >= 5:
+        return {"dtype": dtype}
+    return {"torch_dtype": dtype}
+
+
+def parameter_fingerprint(model, *, trainable_only: bool = True) -> str:
+    digest = hashlib.sha256()
+    seen = set()
+    count = 0
+
+    named_parameters = getattr(model, "named_parameters", None)
+    if not callable(named_parameters):
+        raise ValueError("model does not expose named_parameters")
+
+    for name, param in named_parameters():
+        if trainable_only and not bool(param.requires_grad):
+            continue
+        identity = id(param)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        count += 1
+
+        tensor = param.detach().float().cpu().contiguous()
+        digest.update(str(name).encode("utf-8"))
+        digest.update(str(tuple(tensor.shape)).encode("ascii"))
+        digest.update(memoryview(tensor.numpy()).cast("B"))
+
+    if count == 0:
+        raise ValueError("no parameters available for fingerprint")
+    return digest.hexdigest()
+
+
+def weight_change_evidence(
+    *,
+    initial_fingerprint: str,
+    final_fingerprint: str,
+    starting_global_step: int,
+    ending_global_step: int,
+    prior_changed: bool,
+) -> bool:
+    if starting_global_step < 0 or ending_global_step < starting_global_step:
+        raise ValueError("invalid optimizer step range")
+
+    new_steps = ending_global_step - starting_global_step
+    changed_this_session = (
+        new_steps > 0
+        and str(initial_fingerprint) != str(final_fingerprint)
+    )
+    if new_steps > 0 and not changed_this_session:
+        raise RuntimeError(
+            "optimizer steps completed but selected original Qwen weights did not change"
+        )
+    return bool(prior_changed or changed_this_session)
+
+
+def _atomic_write_json(path: Path, value: dict) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def save_optimizer_checkpoint(
+    *,
+    output_dir: Path,
+    cursor: ResumeCursor,
+    model,
+    tokenizer,
+    optimizer,
+    scheduler,
+    torch,
+    metadata: dict | None = None,
+) -> Path:
+    """Publish a complete checkpoint only after an optimizer boundary."""
+    if cursor.global_step <= 0:
+        raise ValueError("checkpoint requires a completed optimizer step")
+
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    name = f"checkpoint-{cursor.global_step:08d}"
+    final_dir = output / name
+    tmp_dir = output / f".{name}.tmp"
+
+    if final_dir.exists():
+        raise FileExistsError(f"checkpoint already exists: {final_dir}")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+
+    tmp_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        model_dir = tmp_dir / "model"
+        model.save_pretrained(model_dir)
+        tokenizer.save_pretrained(model_dir)
+
+        torch.save(optimizer.state_dict(), tmp_dir / "optimizer.pt")
+        torch.save(scheduler.state_dict(), tmp_dir / "scheduler.pt")
+
+        rng_state = {
+            "python_random_state": random.getstate(),
+            "torch_rng_state": torch.get_rng_state(),
+            "cuda_rng_state_all": (
+                torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else []
+            ),
+        }
+        torch.save(rng_state, tmp_dir / "rng_state.pt")
+
+        manifest = {
+            "schema_version": 1,
+            "cursor": cursor.to_dict(),
+            "metadata": dict(metadata or {}),
+        }
+        _atomic_write_json(tmp_dir / "trainer_state.json", manifest)
+
+        os.replace(tmp_dir, final_dir)
+
+        # Persist the directory rename when the platform supports fsync on dirs.
+        try:
+            fd = os.open(str(output), os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError:
+            pass
+
+        return final_dir
+    except Exception:
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+def read_checkpoint_manifest(checkpoint_dir: Path) -> dict:
+    path = Path(checkpoint_dir) / "trainer_state.json"
+    with path.open("r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    if int(manifest.get("schema_version", 0)) != 1:
+        raise ValueError("unsupported checkpoint schema")
+    return manifest
+
+
+def read_checkpoint_cursor(checkpoint_dir: Path) -> ResumeCursor:
+    manifest = read_checkpoint_manifest(checkpoint_dir)
+    return ResumeCursor.from_dict(manifest.get("cursor"))
+
+
+def read_checkpoint_metadata(checkpoint_dir: Path) -> dict:
+    manifest = read_checkpoint_manifest(checkpoint_dir)
+    metadata = manifest.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("checkpoint metadata must be an object")
+    return dict(metadata)
+
+
+def validate_resume_metadata(
+    checkpoint_dir: Path,
+    expected_metadata: dict,
+) -> None:
+    actual = read_checkpoint_metadata(checkpoint_dir)
+    expected = dict(expected_metadata or {})
+
+    if not actual:
+        raise ValueError("checkpoint metadata is missing")
+
+    mismatches = []
+    for key, expected_value in expected.items():
+        actual_value = actual.get(key, None)
+        if actual_value != expected_value:
+            mismatches.append(
+                f"{key}: checkpoint={actual_value!r} current={expected_value!r}"
+            )
+
+    if mismatches:
+        raise ValueError(
+            "resume metadata mismatch: " + "; ".join(mismatches)
+        )
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_training_fingerprint(args) -> dict:
+    return {
+        "dataset_sha256": file_sha256(args.train_sft),
+        "base_model": str(args.base_model),
+        "seed": int(args.seed),
+        "last_n_blocks": int(args.last_n_blocks),
+        "max_trainable_ratio": float(args.max_trainable_ratio),
+        "max_length": int(args.max_length),
+        "learning_rate": float(args.learning_rate),
+        "weight_decay": float(args.weight_decay),
+        "max_grad_norm": float(args.max_grad_norm),
+        "gradient_accumulation_steps": int(args.gradient_accumulation_steps),
+    }
+
+
+def restore_optimizer_checkpoint(
+    *,
+    checkpoint_dir: Path,
+    optimizer,
+    scheduler,
+    torch,
+    map_location="cpu",
+) -> ResumeCursor:
+    """Restore optimizer/scheduler/RNG state from a completed checkpoint."""
+    checkpoint = Path(checkpoint_dir)
+    cursor = read_checkpoint_cursor(checkpoint)
+
+    optimizer_path = checkpoint / "optimizer.pt"
+    scheduler_path = checkpoint / "scheduler.pt"
+    rng_path = checkpoint / "rng_state.pt"
+
+    for path in (optimizer_path, scheduler_path, rng_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"missing checkpoint file: {path}")
+
+    optimizer_state = torch.load(
+        optimizer_path,
+        map_location=map_location,
+        weights_only=False,
+    )
+    scheduler_state = torch.load(
+        scheduler_path,
+        map_location=map_location,
+        weights_only=False,
+    )
+    rng_state = torch.load(
+        rng_path,
+        map_location="cpu",
+        weights_only=False,
+    )
+
+    optimizer.load_state_dict(optimizer_state)
+    scheduler.load_state_dict(scheduler_state)
+
+    python_state = rng_state.get("python_random_state")
+    torch_state = rng_state.get("torch_rng_state")
+    cuda_states = rng_state.get("cuda_rng_state_all", [])
+
+    if python_state is None or torch_state is None:
+        raise ValueError("checkpoint RNG state is incomplete")
+
+    random.setstate(python_state)
+    torch.set_rng_state(torch_state)
+
+    if torch.cuda.is_available() and cuda_states:
+        torch.cuda.set_rng_state_all(cuda_states)
+
+    return cursor
+
+
+def _unique_parameters(model) -> list:
+    seen = set()
+    out = []
+    for param in model.parameters():
+        key = id(param)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(param)
+    return out
+
+
+def _set_requires_grad(module, value: bool) -> None:
+    for param in module.parameters():
+        param.requires_grad = value
+
+
+def select_trainable_parameters(
+    model,
+    last_n_blocks: int = 2,
+    max_ratio: float = 0.20,
+) -> dict:
+    """Freeze the model, then open only selected original decoder weights.
+
+    This function is intentionally framework-light so its safety contract can
+    be tested without downloading PyTorch or the 494M model in CI.
+    """
+    if last_n_blocks <= 0:
+        raise ValueError("last_n_blocks must be >= 1")
+    if not (0.0 < float(max_ratio) < 1.0):
+        raise ValueError("max_ratio must be between 0 and 1")
+
+    backbone = getattr(model, "model", None)
+    layers = getattr(backbone, "layers", None)
+    norm = getattr(backbone, "norm", None)
+    if layers is None or norm is None:
+        raise ValueError("unexpected Qwen model structure: model.layers/norm missing")
+    if last_n_blocks > len(layers):
+        raise ValueError(
+            f"last_n_blocks={last_n_blocks} exceeds layer count={len(layers)}"
+        )
+
+    all_params = _unique_parameters(model)
+    if not all_params:
+        raise ValueError("model has no parameters")
+
+    for param in all_params:
+        param.requires_grad = False
+
+    for block in layers[-last_n_blocks:]:
+        _set_requires_grad(block, True)
+    _set_requires_grad(norm, True)
+
+    # Explicitly keep the shared input/output embedding tensor frozen.
+    embed_tokens = getattr(backbone, "embed_tokens", None)
+    if embed_tokens is not None:
+        _set_requires_grad(embed_tokens, False)
+    lm_head = getattr(model, "lm_head", None)
+    if lm_head is not None:
+        _set_requires_grad(lm_head, False)
+
+    total = sum(int(p.numel()) for p in all_params)
+    trainable_params = [p for p in all_params if bool(p.requires_grad)]
+    trainable = sum(int(p.numel()) for p in trainable_params)
+    ratio = (trainable / total) if total else 0.0
+
+    if trainable <= 0:
+        raise ValueError("no trainable parameters selected")
+
+    if ratio >= max_ratio:
+        # Fail closed: never leave an unexpectedly broad trainable set active.
+        for param in all_params:
+            param.requires_grad = False
+        raise ValueError(
+            f"unsafe trainable ratio: {ratio:.4f} >= {max_ratio:.4f}"
+        )
+
+    names = []
+    named_parameters = getattr(model, "named_parameters", None)
+    if callable(named_parameters):
+        names = [
+            name
+            for name, param in named_parameters()
+            if bool(param.requires_grad)
+        ]
+
+    return {
+        "total_parameters": total,
+        "trainable_parameters": trainable,
+        "trainable_tensors": len(trainable_params),
+        "ratio": ratio,
+        "trainable_names": names,
+        "last_n_blocks": last_n_blocks,
+    }
+
+
+def _load_jsonl(path: Path) -> list[dict]:
+    rows = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"invalid JSON at {path}:{line_number}: {exc}"
+                ) from exc
+            prompt = str(row.get("prompt", "")).strip()
+            response = str(row.get("response", "")).strip()
+            if not prompt or not response:
+                raise ValueError(
+                    f"missing prompt/response at {path}:{line_number}"
+                )
+            rows.append(
+                {
+                    "id": str(row.get("id", line_number)).strip(),
+                    "prompt": prompt,
+                    "response": response,
+                }
+            )
+    if not rows:
+        raise ValueError(f"no valid SFT rows in {path}")
+    return rows
+
+
+def _seed_everything(seed: int, torch) -> None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def build_masked_sequence(
+    prompt_ids,
+    full_ids,
+    max_length: int,
+) -> tuple[list[int], list[int]]:
+    """Left-truncate while computing loss only on surviving assistant tokens."""
+    if max_length <= 0:
+        raise ValueError("max_length must be positive")
+
+    prompt = list(prompt_ids)
+    full = list(full_ids)
+    if len(full) <= len(prompt):
+        raise ValueError("assistant response is missing from tokenized sequence")
+
+    # Chat-template generation prompt should be the prefix immediately before
+    # assistant content. Fail instead of silently training on a mismatched mask.
+    prefix_len = min(len(prompt), len(full))
+    if full[:prefix_len] != prompt[:prefix_len]:
+        raise ValueError("chat template prompt is not a prefix of full sequence")
+
+    removed_from_left = max(0, len(full) - max_length)
+    trimmed = full[removed_from_left:]
+
+    surviving_prompt = max(0, len(prompt) - removed_from_left)
+    surviving_prompt = min(surviving_prompt, len(trimmed))
+
+    labels = list(trimmed)
+    for index in range(surviving_prompt):
+        labels[index] = -100
+
+    if not labels or all(label == -100 for label in labels):
+        raise ValueError("assistant response vanished after truncation")
+
+    return trimmed, labels
+
+
+def _build_example(tokenizer, row: dict, max_length: int, torch) -> dict:
+    user_messages = [{"role": "user", "content": row["prompt"]}]
+    full_messages = [
+        {"role": "user", "content": row["prompt"]},
+        {"role": "assistant", "content": row["response"]},
+    ]
+
+    prompt_ids = tokenizer.apply_chat_template(
+        user_messages,
+        tokenize=True,
+        add_generation_prompt=True,
+    )
+    full_ids = tokenizer.apply_chat_template(
+        full_messages,
+        tokenize=True,
+        add_generation_prompt=False,
+    )
+
+    input_ids, labels = build_masked_sequence(
+        prompt_ids=prompt_ids,
+        full_ids=full_ids,
+        max_length=max_length,
+    )
+
+    return {
+        "input_ids": torch.tensor(input_ids, dtype=torch.long),
+        "labels": torch.tensor(labels, dtype=torch.long),
+    }
+
+
+def _collate_one(example: dict, pad_token_id: int, torch) -> dict:
+    input_ids = example["input_ids"].unsqueeze(0)
+    labels = example["labels"].unsqueeze(0)
+    attention_mask = torch.ones_like(input_ids)
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": labels,
+    }
+
+
+def run_training(args) -> int:
+    try:
+        import torch
+        import transformers
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError as exc:
+        raise SystemExit(
+            "Training dependencies are missing. Run check_environment.py first; "
+            "do not blindly replace Kaggle's package stack."
+        ) from exc
+
+    if args.epochs <= 0:
+        raise ValueError("epochs must be positive")
+    if args.gradient_accumulation_steps <= 0:
+        raise ValueError("gradient_accumulation_steps must be positive")
+    if args.checkpoint_every_steps < 0:
+        raise ValueError("checkpoint_every_steps must be non-negative")
+
+    training_fingerprint = build_training_fingerprint(args)
+
+    _seed_everything(args.seed, torch)
+
+    has_cuda = bool(torch.cuda.is_available())
+    if not has_cuda and not args.allow_cpu:
+        raise SystemExit(
+            "CUDA GPU is required by default. Pass --allow-cpu only for a tiny smoke test."
+        )
+
+    if has_cuda:
+        dtype = (
+            torch.bfloat16
+            if torch.cuda.is_bf16_supported()
+            else torch.float16
+        )
+        device = torch.device("cuda")
+    else:
+        dtype = torch.float32
+        device = torch.device("cpu")
+
+    resume_dir = (
+        Path(args.resume_from_checkpoint)
+        if args.resume_from_checkpoint is not None
+        else None
+    )
+    resume_metadata = {}
+    model_source = args.base_model
+    if resume_dir is not None:
+        validate_resume_metadata(resume_dir, training_fingerprint)
+        resume_metadata = read_checkpoint_metadata(resume_dir)
+        checkpoint_model = resume_dir / "model"
+        if not checkpoint_model.is_dir():
+            raise FileNotFoundError(
+                f"resume checkpoint model directory missing: {checkpoint_model}"
+            )
+        model_source = str(checkpoint_model)
+
+    tokenizer = AutoTokenizer.from_pretrained(model_source, use_fast=True)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_source,
+        **model_dtype_kwargs(transformers.__version__, dtype),
+    )
+    model.config.use_cache = False
+
+    if hasattr(model, "gradient_checkpointing_enable"):
+        model.gradient_checkpointing_enable()
+
+    report = select_trainable_parameters(
+        model,
+        last_n_blocks=args.last_n_blocks,
+        max_ratio=args.max_trainable_ratio,
+    )
+    print(json.dumps({"trainable_selection": report}, ensure_ascii=False, indent=2))
+
+    session_initial_fingerprint = parameter_fingerprint(
+        model,
+        trainable_only=True,
+    )
+    prior_original_weights_changed = bool(
+        resume_metadata.get("original_weights_changed", False)
+    )
+
+    model.to(device)
+    model.train()
+
+    rows = _load_jsonl(args.train_sft)
+    examples = [
+        _build_example(tokenizer, row, args.max_length, torch)
+        for row in rows
+    ]
+
+    optimizer = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay,
+    )
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lambda _step: 1.0,
+    )
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    cursor = ResumeCursor(global_step=0, epoch=0, next_order_offset=0)
+    if resume_dir is not None:
+        cursor = restore_optimizer_checkpoint(
+            checkpoint_dir=resume_dir,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            torch=torch,
+            map_location=device,
+        )
+
+    global_step = cursor.global_step
+    starting_global_step = global_step
+    original_weights_changed = prior_original_weights_changed
+    optimizer.zero_grad(set_to_none=True)
+
+    if cursor.epoch > args.epochs:
+        raise ValueError(
+            f"resume epoch {cursor.epoch} exceeds configured epochs {args.epochs}"
+        )
+
+    stop_training = optimizer_limit_reached(
+        global_step,
+        args.max_optimizer_steps,
+    )
+    for epoch in range(cursor.epoch, args.epochs):
+        if stop_training:
+            break
+        order = build_epoch_order(len(examples), args.seed, epoch)
+        start_offset = (
+            cursor.next_order_offset
+            if epoch == cursor.epoch
+            else 0
+        )
+
+        groups = optimizer_step_groups(
+            order_length=len(order),
+            start_offset=start_offset,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+        )
+
+        for group_start, group_end in groups:
+            optimizer.zero_grad(set_to_none=True)
+            group_size = group_end - group_start
+            group_loss = 0.0
+            last_example_index = None
+
+            for order_offset in range(group_start, group_end):
+                example_index = order[order_offset]
+                last_example_index = example_index
+
+                batch = _collate_one(
+                    examples[example_index],
+                    tokenizer.pad_token_id,
+                    torch,
+                )
+                batch = {k: v.to(device) for k, v in batch.items()}
+
+                outputs = model(**batch)
+                raw_loss = outputs.loss
+                if not torch.isfinite(raw_loss):
+                    raise RuntimeError(
+                        f"non-finite loss at epoch={epoch} example={example_index}"
+                    )
+
+                (raw_loss / group_size).backward()
+                group_loss += float(raw_loss.detach().cpu())
+
+            torch.nn.utils.clip_grad_norm_(
+                [p for p in model.parameters() if p.requires_grad],
+                args.max_grad_norm,
+            )
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            global_step += 1
+
+            if not original_weights_changed:
+                current_fingerprint = parameter_fingerprint(
+                    model,
+                    trainable_only=True,
+                )
+                original_weights_changed = weight_change_evidence(
+                    initial_fingerprint=session_initial_fingerprint,
+                    final_fingerprint=current_fingerprint,
+                    starting_global_step=starting_global_step,
+                    ending_global_step=global_step,
+                    prior_changed=prior_original_weights_changed,
+                )
+
+            cursor = cursor_after_optimizer_step(
+                global_step=global_step,
+                epoch=epoch,
+                completed_order_offset=group_end - 1,
+                order_length=len(order),
+            )
+
+            print(
+                json.dumps(
+                    {
+                        "epoch": epoch,
+                        "global_step": global_step,
+                        "last_example_index": last_example_index,
+                        "group_start_offset": group_start,
+                        "group_end_offset": group_end,
+                        "group_size": group_size,
+                        "loss": group_loss / group_size,
+                        "next_cursor": cursor.to_dict(),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+            reached_limit = optimizer_limit_reached(
+                global_step,
+                args.max_optimizer_steps,
+            )
+            periodic_checkpoint = bool(
+                args.checkpoint_every_steps
+                and global_step % args.checkpoint_every_steps == 0
+            )
+
+            if periodic_checkpoint or reached_limit:
+                save_optimizer_checkpoint(
+                    output_dir=output_dir,
+                    cursor=cursor,
+                    model=model,
+                    tokenizer=tokenizer,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    torch=torch,
+                    metadata={
+                        **training_fingerprint,
+                        "original_weights_changed": bool(
+                            original_weights_changed
+                        ),
+                    },
+                )
+
+            if reached_limit:
+                stop_training = True
+                break
+
+        if stop_training:
+            break
+
+        # After a completed epoch, the cursor must point to the next epoch.
+        if groups and cursor.epoch < epoch + 1:
+            raise RuntimeError("resume cursor did not advance after completed epoch")
+
+    session_final_fingerprint = parameter_fingerprint(
+        model,
+        trainable_only=True,
+    )
+    original_weights_changed = weight_change_evidence(
+        initial_fingerprint=session_initial_fingerprint,
+        final_fingerprint=session_final_fingerprint,
+        starting_global_step=starting_global_step,
+        ending_global_step=global_step,
+        prior_changed=prior_original_weights_changed,
+    )
+
+    final_dir = output_dir / "final"
+    final_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(final_dir)
+    tokenizer.save_pretrained(final_dir)
+
+    summary = {
+        "base_model": args.base_model,
+        "model_source": str(model_source),
+        "resumed_from": str(resume_dir) if resume_dir is not None else None,
+        "seed": args.seed,
+        "optimizer_steps": global_step,
+        "starting_optimizer_step": starting_global_step,
+        "session_optimizer_steps": global_step - starting_global_step,
+        "cursor": cursor.to_dict(),
+        "session_initial_trainable_fingerprint": session_initial_fingerprint,
+        "session_final_trainable_fingerprint": session_final_fingerprint,
+        "original_weights_changed": bool(original_weights_changed),
+        "checkpoint_every_steps": args.checkpoint_every_steps,
+        "training_fingerprint": training_fingerprint,
+        "trainable_selection": report,
+        "output": str(final_dir),
+    }
+    (output_dir / "training_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return 0
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--train-sft", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--base-model", default=BASE_MODEL)
+    parser.add_argument("--resume-from-checkpoint", type=Path)
+    parser.add_argument("--last-n-blocks", type=int, default=2)
+    parser.add_argument("--max-trainable-ratio", type=float, default=0.20)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--learning-rate", type=float, default=2e-5)
+    parser.add_argument("--weight-decay", type=float, default=0.01)
+    parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
+    parser.add_argument("--checkpoint-every-steps", type=int, default=50)
+    parser.add_argument("--max-optimizer-steps", type=int, default=0)
+    parser.add_argument("--allow-cpu", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = _parse_args()
+    return run_training(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

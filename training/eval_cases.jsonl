@@ -1,0 +1,20 @@
+{"id":"math_add","prompt":"احسب 17 + 25. أجب بالرقم فقط.","check":{"type":"exact_any","values":["42","٤٢"]}}
+{"id":"math_mul","prompt":"احسب 9 × 7. أجب بالرقم فقط.","check":{"type":"exact_any","values":["63","٦٣"]}}
+{"id":"math_div","prompt":"احسب 100 ÷ 4. أجب بالرقم فقط.","check":{"type":"exact_any","values":["25","٢٥"]}}
+{"id":"math_sub","prompt":"احسب 15 - 8. أجب بالرقم فقط.","check":{"type":"exact_any","values":["7","٧"]}}
+{"id":"math_square","prompt":"ما مربع العدد 12؟ أجب بالرقم فقط.","check":{"type":"exact_any","values":["144","١٤٤"]}}
+{"id":"fact_france_capital","prompt":"ما عاصمة فرنسا؟ أجب باسم المدينة فقط.","check":{"type":"contains_any","values":["باريس","paris"]}}
+{"id":"fact_planet","prompt":"ما اسم الكوكب الذي نعيش عليه؟ أجب بكلمة واحدة.","check":{"type":"contains_any","values":["الأرض","الارض","earth"]}}
+{"id":"fact_moon","prompt":"ما اسم القمر الطبيعي للأرض؟ أجب بكلمة واحدة.","check":{"type":"contains_any","values":["القمر","moon"]}}
+{"id":"fact_week","prompt":"كم عدد أيام الأسبوع؟ أجب بالرقم فقط.","check":{"type":"contains_any","values":["7","٧","سبعة"]}}
+{"id":"fact_water","prompt":"ما الصيغة الكيميائية للماء؟ أجب بالصيغة فقط.","check":{"type":"contains_any","values":["H2O","h₂o"]}}
+{"id":"en_opposite","prompt":"What is the opposite of hot? Answer with one word.","check":{"type":"contains_any","values":["cold"]}}
+{"id":"en_plural","prompt":"What is the plural of child? Answer with one word.","check":{"type":"contains_any","values":["children"]}}
+{"id":"en_math","prompt":"What is 2 + 3? Answer with the number only.","check":{"type":"exact_any","values":["5"]}}
+{"id":"instruction_yes","prompt":"اكتب الكلمة التالية فقط دون أي شرح: نعم","check":{"type":"exact_any","values":["نعم"]}}
+{"id":"instruction_h33","prompt":"انسخ هذا النص فقط كما هو دون شرح: H33","check":{"type":"exact_any","values":["H33"]}}
+{"id":"reason_apples","prompt":"لدى أحمد 3 تفاحات واشترى تفاحتين إضافيتين. كم تفاحة لديه؟ أجب بالرقم فقط.","check":{"type":"contains_any","values":["5","٥"]}}
+{"id":"reason_books","prompt":"لديك 10 كتب وأعطيت 3 منها لصديق. كم كتابًا بقي؟ أجب بالرقم فقط.","check":{"type":"contains_any","values":["7","٧"]}}
+{"id":"reason_sequence","prompt":"أكمل النمط: 2، 4، 6، ؟ أجب بالرقم فقط.","check":{"type":"contains_any","values":["8","٨"]}}
+{"id":"fact_hour","prompt":"كم دقيقة في الساعة الواحدة؟ أجب بالرقم فقط.","check":{"type":"contains_any","values":["60","٦٠"]}}
+{"id":"fact_triangle","prompt":"كم ضلعًا للمثلث؟ أجب بالرقم فقط.","check":{"type":"contains_any","values":["3","٣","ثلاثة"]}}
