@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import random
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -85,6 +86,97 @@ def cursor_after_optimizer_step(
         epoch=epoch,
         next_order_offset=next_offset,
     )
+
+
+def _atomic_write_json(path: Path, value: dict) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+
+def save_optimizer_checkpoint(
+    *,
+    output_dir: Path,
+    cursor: ResumeCursor,
+    model,
+    tokenizer,
+    optimizer,
+    scheduler,
+    torch,
+) -> Path:
+    """Publish a complete checkpoint only after an optimizer boundary."""
+    if cursor.global_step <= 0:
+        raise ValueError("checkpoint requires a completed optimizer step")
+
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    name = f"checkpoint-{cursor.global_step:08d}"
+    final_dir = output / name
+    tmp_dir = output / f".{name}.tmp"
+
+    if final_dir.exists():
+        raise FileExistsError(f"checkpoint already exists: {final_dir}")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+
+    tmp_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        model_dir = tmp_dir / "model"
+        model.save_pretrained(model_dir)
+        tokenizer.save_pretrained(model_dir)
+
+        torch.save(optimizer.state_dict(), tmp_dir / "optimizer.pt")
+        torch.save(scheduler.state_dict(), tmp_dir / "scheduler.pt")
+
+        rng_state = {
+            "python_random_state": random.getstate(),
+            "torch_rng_state": torch.get_rng_state(),
+            "cuda_rng_state_all": (
+                torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else []
+            ),
+        }
+        torch.save(rng_state, tmp_dir / "rng_state.pt")
+
+        manifest = {
+            "schema_version": 1,
+            "cursor": cursor.to_dict(),
+        }
+        _atomic_write_json(tmp_dir / "trainer_state.json", manifest)
+
+        os.replace(tmp_dir, final_dir)
+
+        # Persist the directory rename when the platform supports fsync on dirs.
+        try:
+            fd = os.open(str(output), os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError:
+            pass
+
+        return final_dir
+    except Exception:
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+def read_checkpoint_cursor(checkpoint_dir: Path) -> ResumeCursor:
+    path = Path(checkpoint_dir) / "trainer_state.json"
+    with path.open("r", encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    if int(manifest.get("schema_version", 0)) != 1:
+        raise ValueError("unsupported checkpoint schema")
+    return ResumeCursor.from_dict(manifest.get("cursor"))
 
 
 def _unique_parameters(model) -> list:
