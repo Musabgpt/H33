@@ -154,6 +154,42 @@ def _seed_everything(seed: int, torch) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def build_masked_sequence(
+    prompt_ids,
+    full_ids,
+    max_length: int,
+) -> tuple[list[int], list[int]]:
+    """Left-truncate while computing loss only on surviving assistant tokens."""
+    if max_length <= 0:
+        raise ValueError("max_length must be positive")
+
+    prompt = list(prompt_ids)
+    full = list(full_ids)
+    if len(full) <= len(prompt):
+        raise ValueError("assistant response is missing from tokenized sequence")
+
+    # Chat-template generation prompt should be the prefix immediately before
+    # assistant content. Fail instead of silently training on a mismatched mask.
+    prefix_len = min(len(prompt), len(full))
+    if full[:prefix_len] != prompt[:prefix_len]:
+        raise ValueError("chat template prompt is not a prefix of full sequence")
+
+    removed_from_left = max(0, len(full) - max_length)
+    trimmed = full[removed_from_left:]
+
+    surviving_prompt = max(0, len(prompt) - removed_from_left)
+    surviving_prompt = min(surviving_prompt, len(trimmed))
+
+    labels = list(trimmed)
+    for index in range(surviving_prompt):
+        labels[index] = -100
+
+    if not labels or all(label == -100 for label in labels):
+        raise ValueError("assistant response vanished after truncation")
+
+    return trimmed, labels
+
+
 def _build_example(tokenizer, row: dict, max_length: int, torch) -> dict:
     user_messages = [{"role": "user", "content": row["prompt"]}]
     full_messages = [
@@ -172,23 +208,14 @@ def _build_example(tokenizer, row: dict, max_length: int, torch) -> dict:
         add_generation_prompt=False,
     )
 
-    full_ids = list(full_ids)[-max_length:]
-    prompt_ids = list(prompt_ids)
-
-    # If left-truncation removed some prompt tokens, only mask the prompt
-    # portion that still survives at the beginning of this truncated sequence.
-    surviving_prompt = min(len(prompt_ids), len(full_ids))
-    labels = list(full_ids)
-    for i in range(surviving_prompt):
-        labels[i] = -100
-
-    if all(label == -100 for label in labels):
-        raise ValueError(
-            f"assistant response vanished after truncation for id={row['id']}"
-        )
+    input_ids, labels = build_masked_sequence(
+        prompt_ids=prompt_ids,
+        full_ids=full_ids,
+        max_length=max_length,
+    )
 
     return {
-        "input_ids": torch.tensor(full_ids, dtype=torch.long),
+        "input_ids": torch.tensor(input_ids, dtype=torch.long),
         "labels": torch.tensor(labels, dtype=torch.long),
     }
 
