@@ -659,7 +659,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void startNewChat() {
         generationId++;
-        if (localInference != null) localInference.cancel();\n        else if (engine != null) engine.cancelGeneration();
+        if (localInference != null) localInference.cancel();
+        else if (engine != null) engine.cancelGeneration();
 
         messagesContainer.removeAllViews();
         addWelcomeMessage();
