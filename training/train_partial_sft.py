@@ -478,23 +478,52 @@ def run_training(args) -> int:
             "do not blindly replace Kaggle's package stack."
         ) from exc
 
+    if args.epochs <= 0:
+        raise ValueError("epochs must be positive")
+    if args.gradient_accumulation_steps <= 0:
+        raise ValueError("gradient_accumulation_steps must be positive")
+    if args.checkpoint_every_steps < 0:
+        raise ValueError("checkpoint_every_steps must be non-negative")
+
     _seed_everything(args.seed, torch)
 
-    if not torch.cuda.is_available() and not args.allow_cpu:
+    has_cuda = bool(torch.cuda.is_available())
+    if not has_cuda and not args.allow_cpu:
         raise SystemExit(
             "CUDA GPU is required by default. Pass --allow-cpu only for a tiny smoke test."
         )
 
-    dtype = torch.bfloat16 if (
-        torch.cuda.is_available() and torch.cuda.is_bf16_supported()
-    ) else torch.float16
+    if has_cuda:
+        dtype = (
+            torch.bfloat16
+            if torch.cuda.is_bf16_supported()
+            else torch.float16
+        )
+        device = torch.device("cuda")
+    else:
+        dtype = torch.float32
+        device = torch.device("cpu")
 
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model, use_fast=True)
+    resume_dir = (
+        Path(args.resume_from_checkpoint)
+        if args.resume_from_checkpoint is not None
+        else None
+    )
+    model_source = args.base_model
+    if resume_dir is not None:
+        checkpoint_model = resume_dir / "model"
+        if not checkpoint_model.is_dir():
+            raise FileNotFoundError(
+                f"resume checkpoint model directory missing: {checkpoint_model}"
+            )
+        model_source = str(checkpoint_model)
+
+    tokenizer = AutoTokenizer.from_pretrained(model_source, use_fast=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
     model = AutoModelForCausalLM.from_pretrained(
-        args.base_model,
+        model_source,
         torch_dtype=dtype,
     )
     model.config.use_cache = False
@@ -509,7 +538,6 @@ def run_training(args) -> int:
     )
     print(json.dumps({"trainable_selection": report}, ensure_ascii=False, indent=2))
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.train()
 
@@ -524,68 +552,136 @@ def run_training(args) -> int:
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
     )
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lambda _step: 1.0,
+    )
 
-    output_dir = args.output_dir
+    output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    global_step = 0
-    micro_step = 0
+    cursor = ResumeCursor(global_step=0, epoch=0, next_order_offset=0)
+    if resume_dir is not None:
+        cursor = restore_optimizer_checkpoint(
+            checkpoint_dir=resume_dir,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            torch=torch,
+            map_location=device,
+        )
+
+    global_step = cursor.global_step
     optimizer.zero_grad(set_to_none=True)
 
-    for epoch in range(args.epochs):
-        order = list(range(len(examples)))
-        random.Random(args.seed + epoch).shuffle(order)
+    if cursor.epoch > args.epochs:
+        raise ValueError(
+            f"resume epoch {cursor.epoch} exceeds configured epochs {args.epochs}"
+        )
 
-        for example_index in order:
-            batch = _collate_one(
-                examples[example_index],
-                tokenizer.pad_token_id,
-                torch,
-            )
-            batch = {k: v.to(device) for k, v in batch.items()}
+    stop_training = False
+    for epoch in range(cursor.epoch, args.epochs):
+        order = build_epoch_order(len(examples), args.seed, epoch)
+        start_offset = (
+            cursor.next_order_offset
+            if epoch == cursor.epoch
+            else 0
+        )
 
-            outputs = model(**batch)
-            loss = outputs.loss / args.gradient_accumulation_steps
-            if not torch.isfinite(loss):
-                raise RuntimeError(
-                    f"non-finite loss at epoch={epoch} example={example_index}"
+        groups = optimizer_step_groups(
+            order_length=len(order),
+            start_offset=start_offset,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+        )
+
+        for group_start, group_end in groups:
+            optimizer.zero_grad(set_to_none=True)
+            group_size = group_end - group_start
+            group_loss = 0.0
+            last_example_index = None
+
+            for order_offset in range(group_start, group_end):
+                example_index = order[order_offset]
+                last_example_index = example_index
+
+                batch = _collate_one(
+                    examples[example_index],
+                    tokenizer.pad_token_id,
+                    torch,
                 )
-            loss.backward()
-            micro_step += 1
+                batch = {k: v.to(device) for k, v in batch.items()}
 
-            should_step = (
-                micro_step % args.gradient_accumulation_steps == 0
-                or example_index == order[-1]
-            )
-            if not should_step:
-                continue
+                outputs = model(**batch)
+                raw_loss = outputs.loss
+                if not torch.isfinite(raw_loss):
+                    raise RuntimeError(
+                        f"non-finite loss at epoch={epoch} example={example_index}"
+                    )
+
+                (raw_loss / group_size).backward()
+                group_loss += float(raw_loss.detach().cpu())
 
             torch.nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad],
                 args.max_grad_norm,
             )
             optimizer.step()
+            scheduler.step()
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
+
+            cursor = cursor_after_optimizer_step(
+                global_step=global_step,
+                epoch=epoch,
+                completed_order_offset=group_end - 1,
+                order_length=len(order),
+            )
 
             print(
                 json.dumps(
                     {
                         "epoch": epoch,
                         "global_step": global_step,
-                        "example_index": example_index,
-                        "loss": float(loss.detach().cpu())
-                        * args.gradient_accumulation_steps,
+                        "last_example_index": last_example_index,
+                        "group_start_offset": group_start,
+                        "group_end_offset": group_end,
+                        "group_size": group_size,
+                        "loss": group_loss / group_size,
+                        "next_cursor": cursor.to_dict(),
                     },
                     ensure_ascii=False,
                 )
             )
 
-            if args.max_optimizer_steps and global_step >= args.max_optimizer_steps:
+            reached_limit = bool(
+                args.max_optimizer_steps
+                and global_step >= args.max_optimizer_steps
+            )
+            periodic_checkpoint = bool(
+                args.checkpoint_every_steps
+                and global_step % args.checkpoint_every_steps == 0
+            )
+
+            if periodic_checkpoint or reached_limit:
+                save_optimizer_checkpoint(
+                    output_dir=output_dir,
+                    cursor=cursor,
+                    model=model,
+                    tokenizer=tokenizer,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    torch=torch,
+                )
+
+            if reached_limit:
+                stop_training = True
                 break
 
-        if args.max_optimizer_steps and global_step >= args.max_optimizer_steps:
+        if stop_training:
             break
+
+        # After a completed epoch, the cursor must point to the next epoch.
+        if groups and cursor.epoch < epoch + 1:
+            raise RuntimeError("resume cursor did not advance after completed epoch")
 
     final_dir = output_dir / "final"
     final_dir.mkdir(parents=True, exist_ok=True)
@@ -594,8 +690,12 @@ def run_training(args) -> int:
 
     summary = {
         "base_model": args.base_model,
+        "model_source": str(model_source),
+        "resumed_from": str(resume_dir) if resume_dir is not None else None,
         "seed": args.seed,
         "optimizer_steps": global_step,
+        "cursor": cursor.to_dict(),
+        "checkpoint_every_steps": args.checkpoint_every_steps,
         "trainable_selection": report,
         "output": str(final_dir),
     }
@@ -611,6 +711,7 @@ def _parse_args():
     parser.add_argument("--train-sft", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--base-model", default=BASE_MODEL)
+    parser.add_argument("--resume-from-checkpoint", type=Path)
     parser.add_argument("--last-n-blocks", type=int, default=2)
     parser.add_argument("--max-trainable-ratio", type=float, default=0.20)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -620,6 +721,7 @@ def _parse_args():
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
+    parser.add_argument("--checkpoint-every-steps", type=int, default=50)
     parser.add_argument("--max-optimizer-steps", type=int, default=0)
     parser.add_argument("--allow-cpu", action="store_true")
     return parser.parse_args()
