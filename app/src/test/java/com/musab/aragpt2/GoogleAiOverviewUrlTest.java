@@ -50,4 +50,19 @@ public class GoogleAiOverviewUrlTest {
         assertTrue(ua.contains("Mobile Safari/537.36"));
     }
 
+    @Test
+    public void distinguishesGoogleConsentFromChallengePages() {
+        assertTrue(GoogleAiOverviewProvider.isConsentPage(
+                "https://consent.google.com/m?continue=https://www.google.com/search"));
+        assertTrue(!GoogleAiOverviewProvider.isChallengePage(
+                "https://consent.google.com/m"));
+
+        assertTrue(GoogleAiOverviewProvider.isChallengePage(
+                "https://www.google.com/sorry/index?continue=x"));
+        assertTrue(GoogleAiOverviewProvider.isChallengePage(
+                "https://www.google.com/recaptcha/api2/anchor"));
+        assertTrue(!GoogleAiOverviewProvider.isConsentPage(
+                "https://www.google.com/sorry/index"));
+    }
+
 }
