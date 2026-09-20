@@ -179,6 +179,61 @@ def read_checkpoint_cursor(checkpoint_dir: Path) -> ResumeCursor:
     return ResumeCursor.from_dict(manifest.get("cursor"))
 
 
+def restore_optimizer_checkpoint(
+    *,
+    checkpoint_dir: Path,
+    optimizer,
+    scheduler,
+    torch,
+    map_location="cpu",
+) -> ResumeCursor:
+    """Restore optimizer/scheduler/RNG state from a completed checkpoint."""
+    checkpoint = Path(checkpoint_dir)
+    cursor = read_checkpoint_cursor(checkpoint)
+
+    optimizer_path = checkpoint / "optimizer.pt"
+    scheduler_path = checkpoint / "scheduler.pt"
+    rng_path = checkpoint / "rng_state.pt"
+
+    for path in (optimizer_path, scheduler_path, rng_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"missing checkpoint file: {path}")
+
+    optimizer_state = torch.load(
+        optimizer_path,
+        map_location=map_location,
+        weights_only=False,
+    )
+    scheduler_state = torch.load(
+        scheduler_path,
+        map_location=map_location,
+        weights_only=False,
+    )
+    rng_state = torch.load(
+        rng_path,
+        map_location="cpu",
+        weights_only=False,
+    )
+
+    optimizer.load_state_dict(optimizer_state)
+    scheduler.load_state_dict(scheduler_state)
+
+    python_state = rng_state.get("python_random_state")
+    torch_state = rng_state.get("torch_rng_state")
+    cuda_states = rng_state.get("cuda_rng_state_all", [])
+
+    if python_state is None or torch_state is None:
+        raise ValueError("checkpoint RNG state is incomplete")
+
+    random.setstate(python_state)
+    torch.set_rng_state(torch_state)
+
+    if torch.cuda.is_available() and cuda_states:
+        torch.cuda.set_rng_state_all(cuda_states)
+
+    return cursor
+
+
 def _unique_parameters(model) -> list:
     seen = set()
     out = []
