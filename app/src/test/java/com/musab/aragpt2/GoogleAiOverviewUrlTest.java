@@ -35,4 +35,19 @@ public class GoogleAiOverviewUrlTest {
         assertTrue(!GoogleAiOverviewProvider.isAllowedGoogleHost("google.com.evil.example"));
     }
 
+    @Test
+    public void chromeLikeUserAgentRemovesWebViewMarkers() {
+        String input =
+                "Mozilla/5.0 (Linux; Android 16; Pixel Build/ABC; wv) "
+                + "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 "
+                + "Chrome/140.0.0.0 Mobile Safari/537.36";
+
+        String ua = GoogleAiOverviewProvider.chromeLikeUserAgent(input);
+
+        assertTrue(!ua.contains("; wv"));
+        assertTrue(!ua.contains("Version/4.0"));
+        assertTrue(ua.contains("Chrome/140.0.0.0"));
+        assertTrue(ua.contains("Mobile Safari/537.36"));
+    }
+
 }
