@@ -1,4 +1,9 @@
-The model is intentionally not committed in the source archive.
-Run scripts/export_aragpt2_onnx.py or the GitHub Actions workflow.
-Expected build asset name: aragpt2.int8.onnx (preferred) or aragpt2.fp32.onnx.
-Required tokenizer assets: tokenizer.json, vocab.json, merges.txt.
+The local model is generated during the build and is not committed to source.
+
+Model: deepseek-ai/deepseek-coder-1.3b-instruct
+Runtime: ONNX Runtime GenAI
+Precision: INT4
+Target: Android arm64-v8a
+
+The generated model package is placed under app/src/main/assets/model
+and must contain genai_config.json plus tokenizer/model assets.
