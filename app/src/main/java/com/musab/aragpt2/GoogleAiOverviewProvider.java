@@ -294,6 +294,15 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
                 || host.endsWith(".google.co.uk");
     }
 
+    static boolean isAllowedGoogleHost(String value) {
+        String host = clean(value).toLowerCase(java.util.Locale.ROOT);
+        if (host.startsWith("www.")) host = host.substring(4);
+        return host.equals("google.com")
+                || host.endsWith(".google.com")
+                || host.equals("google.co.uk")
+                || host.endsWith(".google.co.uk");
+    }
+
     private static boolean isBlockedGooglePage(String value) {
         String url = clean(value).toLowerCase();
         return url.contains("consent.google.")
