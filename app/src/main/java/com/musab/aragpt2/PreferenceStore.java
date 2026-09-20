@@ -29,16 +29,32 @@ public final class PreferenceStore {
 
     public synchronized PreferenceRecord recordSelection(
             CandidateSet set, String candidateId) throws Exception {
+        return recordSelection(
+                set, candidateId, MemoryConflictStatus.NONE);
+    }
+
+    public synchronized PreferenceRecord recordSelection(
+            CandidateSet set,
+            String candidateId,
+            MemoryConflictStatus conflictStatus) throws Exception {
         PreferenceRecord record = PreferenceRecord.selection(
-                set, candidateId, System.currentTimeMillis());
+                set, candidateId, System.currentTimeMillis(), conflictStatus);
         append(record);
         return record;
     }
 
     public synchronized PreferenceRecord recordCorrection(
             CandidateSet set, String correction) throws Exception {
+        return recordCorrection(
+                set, correction, MemoryConflictStatus.NONE);
+    }
+
+    public synchronized PreferenceRecord recordCorrection(
+            CandidateSet set,
+            String correction,
+            MemoryConflictStatus conflictStatus) throws Exception {
         PreferenceRecord record = PreferenceRecord.correction(
-                set, correction, System.currentTimeMillis());
+                set, correction, System.currentTimeMillis(), conflictStatus);
         append(record);
         return record;
     }
