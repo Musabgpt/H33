@@ -1,10 +1,13 @@
 package com.musab.aragpt2;
 
-public final class OrtGenAiLocalInferenceEngine implements LocalInferenceEngine {
-    private final QwenEngine engine;
+public final class OrtGenAiLocalInferenceEngine
+        implements LocalInferenceEngine {
+    private final CodeModelEngine engine;
 
-    public OrtGenAiLocalInferenceEngine(QwenEngine engine) {
-        if (engine == null) throw new IllegalArgumentException("engine required");
+    public OrtGenAiLocalInferenceEngine(CodeModelEngine engine) {
+        if (engine == null) {
+            throw new IllegalArgumentException("engine required");
+        }
         this.engine = engine;
     }
 
@@ -15,14 +18,10 @@ public final class OrtGenAiLocalInferenceEngine implements LocalInferenceEngine 
             String evidenceContext,
             boolean evidenceOnly,
             StreamListener listener) throws Exception {
-        QwenEngine.StreamListener adapter =
-                listener == null ? null : listener::onUpdate;
         return engine.generateCandidate(
                 question,
                 maxNewTokens,
-                evidenceContext,
-                evidenceOnly,
-                adapter
+                listener
         );
     }
 
