@@ -16,8 +16,7 @@ public final class WebEvidenceRetriever {
     }
 
     public WebSearchClient.WebPayload retrieve(
-            String originalQuestion,
-            String englishTranslation) throws Exception {
+            String originalQuestion) throws Exception {
         String original = clean(originalQuestion);
         if (original.isEmpty()) {
             return WebSearchClient.payloadFromAccepted(
@@ -29,7 +28,7 @@ public final class WebEvidenceRetriever {
         }
 
         SearchQueryPlan plan =
-                SearchQueryPlanner.plan(original, englishTranslation);
+                SearchQueryPlanner.plan(original);
         int rawLimit = Math.max(maxResults * 3, 8);
 
         List<SearchResult> accepted = collect(
