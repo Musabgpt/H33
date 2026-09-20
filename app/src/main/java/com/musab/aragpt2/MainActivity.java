@@ -725,59 +725,6 @@ public class MainActivity extends AppCompatActivity {
         block.addView(row);
     }
 
-    private void addAssistantActions(LinearLayout block, TextView bubble,
-                                     String question, String answer) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.START);
-        row.setPadding(dp(4), dp(4), dp(4), 0);
-
-        Button correct = smallButton("✓ صحيح");
-        Button edit = smallButton("✎ تصحيح");
-        Button copy = smallButton("نسخ");
-        Button txt = smallButton("TXT");
-
-        correct.setOnClickListener(v -> {
-            correct.setEnabled(false);
-            executor.execute(() -> {
-                try {
-                    engine.rememberCorrect(question, bubble.getText().toString());
-                    int count = engine.memoryCount();
-                    runOnUiThread(() -> {
-                        correct.setText("✓ تم الحفظ");
-                        status.setText("تم حفظ التقييم • العناصر: " + count);
-                    });
-                } catch (Exception ex) {
-                    runOnUiThread(() -> {
-                        correct.setEnabled(true);
-                        status.setText("فشل الحفظ: " + safeMessage(ex));
-                    });
-                }
-            });
-        });
-
-        edit.setOnClickListener(v ->
-                showCorrectionDialog(question, bubble.getText().toString(), bubble, correct));
-
-        copy.setOnClickListener(v -> {
-            ClipboardManager clipboard =
-                    (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            clipboard.setPrimaryClip(
-                    ClipData.newPlainText("H33 answer", bubble.getText().toString()));
-            Toast.makeText(this, "تم النسخ", Toast.LENGTH_SHORT).show();
-        });
-
-        txt.setOnClickListener(v ->
-                saveTextFile("H33_" + System.currentTimeMillis() + ".txt",
-                        bubble.getText().toString()));
-
-        row.addView(correct);
-        row.addView(edit);
-        row.addView(copy);
-        row.addView(txt);
-        block.addView(row);
-    }
-
     private void exportPreferenceDatasets() {
         if (preferenceStore == null) {
             Toast.makeText(this, "بيانات التعلم غير جاهزة", Toast.LENGTH_SHORT).show();
@@ -835,58 +782,6 @@ public class MainActivity extends AppCompatActivity {
                         status.setText("فشل إنشاء الملف: " + safeMessage(ex)));
             }
         });
-    }
-
-    private void showCorrectionDialog(String question, String oldAnswer,
-                                      TextView bubble, Button correctButton) {
-        EditText correction = new EditText(this);
-        correction.setText(oldAnswer);
-        correction.setSelectAllOnFocus(false);
-        correction.setMinLines(3);
-        correction.setMaxLines(10);
-        correction.setPadding(dp(16), dp(12), dp(16), dp(12));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("اكتب الجواب الأفضل")
-                .setView(correction)
-                .setNegativeButton("إلغاء", null)
-                .setPositiveButton("علّم", null)
-                .create();
-
-        dialog.setOnShowListener(ignored ->
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                    String better = correction.getText().toString().trim();
-                    if (better.isEmpty()) return;
-
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
-
-                    executor.execute(() -> {
-                        try {
-                            engine.learnCorrection(question, oldAnswer, better);
-                            int count = engine.memoryCount();
-
-                            runOnUiThread(() -> {
-                                bubble.setText(better);
-                                lastAssistantAnswer = better;
-                                correctButton.setText("✓ تم التصحيح");
-                                correctButton.setEnabled(false);
-                                status.setText("تم حفظ التصحيح • العناصر: " + count);
-                                dialog.dismiss();
-                            });
-                        } catch (Exception ex) {
-                            runOnUiThread(() -> {
-                                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                                Toast.makeText(
-                                        this,
-                                        "فشل التصحيح: " + safeMessage(ex),
-                                        Toast.LENGTH_LONG
-                                ).show();
-                            });
-                        }
-                    });
-                }));
-
-        dialog.show();
     }
 
     private Button smallButton(String text) {
