@@ -650,9 +650,11 @@ def run_training(args) -> int:
         if args.resume_from_checkpoint is not None
         else None
     )
+    resume_metadata = {}
     model_source = args.base_model
     if resume_dir is not None:
         validate_resume_metadata(resume_dir, training_fingerprint)
+        resume_metadata = read_checkpoint_metadata(resume_dir)
         checkpoint_model = resume_dir / "model"
         if not checkpoint_model.is_dir():
             raise FileNotFoundError(
@@ -679,6 +681,14 @@ def run_training(args) -> int:
         max_ratio=args.max_trainable_ratio,
     )
     print(json.dumps({"trainable_selection": report}, ensure_ascii=False, indent=2))
+
+    session_initial_fingerprint = parameter_fingerprint(
+        model,
+        trainable_only=True,
+    )
+    prior_original_weights_changed = bool(
+        resume_metadata.get("original_weights_changed", False)
+    )
 
     model.to(device)
     model.train()
@@ -713,6 +723,8 @@ def run_training(args) -> int:
         )
 
     global_step = cursor.global_step
+    starting_global_step = global_step
+    original_weights_changed = prior_original_weights_changed
     optimizer.zero_grad(set_to_none=True)
 
     if cursor.epoch > args.epochs:
