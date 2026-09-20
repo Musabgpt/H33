@@ -184,6 +184,7 @@ public class MainActivity extends AppCompatActivity {
     private void showComposerMenu() {
         PopupMenu menu = new PopupMenu(this, plusButton);
         menu.getMenu().add("💾 حفظ آخر جواب TXT");
+        menu.getMenu().add("🧠 تصدير بيانات التعلم");
         menu.getMenu().add("محادثة جديدة");
         menu.getMenu().add("مسح النص");
         menu.getMenu().add("إخفاء لوحة المفاتيح");
@@ -198,6 +199,8 @@ public class MainActivity extends AppCompatActivity {
                     saveTextFile("H33_" + System.currentTimeMillis() + ".txt",
                             lastAssistantAnswer);
                 }
+            } else if (title.startsWith("🧠")) {
+                exportPreferenceDatasets();
             } else if ("محادثة جديدة".equals(title)) {
                 startNewChat();
             } else if ("مسح النص".equals(title)) {
@@ -773,6 +776,49 @@ public class MainActivity extends AppCompatActivity {
         row.addView(copy);
         row.addView(txt);
         block.addView(row);
+    }
+
+    private void exportPreferenceDatasets() {
+        if (preferenceStore == null) {
+            Toast.makeText(this, "بيانات التعلم غير جاهزة", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        status.setText("🧠 يجهز بيانات التعلم…");
+        executor.execute(() -> {
+            try {
+                List<PreferenceRecord> latest = preferenceStore.latestDecisions();
+                if (latest.isEmpty()) {
+                    runOnUiThread(() ->
+                            status.setText("لا توجد اختيارات أو تصحيحات للتصدير"));
+                    return;
+                }
+
+                PreferenceDatasetExporter exporter =
+                        new PreferenceDatasetExporter();
+                String sft = exporter.toSftJsonl(latest);
+                String dpo = exporter.toPreferenceJsonl(latest);
+
+                long stamp = System.currentTimeMillis();
+                String sftPath = TextFileTool.save(
+                        this, "H33_SFT_" + stamp + ".jsonl", sft);
+                String dpoPath = TextFileTool.save(
+                        this, "H33_DPO_" + stamp + ".jsonl", dpo);
+
+                runOnUiThread(() -> {
+                    status.setText("🧠 تم تصدير بيانات التعلم");
+                    Toast.makeText(
+                            this,
+                            "SFT: " + sftPath + "\nDPO: " + dpoPath,
+                            Toast.LENGTH_LONG
+                    ).show();
+                });
+            } catch (Exception ex) {
+                runOnUiThread(() ->
+                        status.setText("فشل تصدير بيانات التعلم: " +
+                                safeMessage(ex)));
+            }
+        });
     }
 
     private void saveTextFile(String fileName, String content) {
