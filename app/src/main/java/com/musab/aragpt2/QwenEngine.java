@@ -60,6 +60,7 @@ public final class QwenEngine implements AutoCloseable {
     private final Model model;
     private final Tokenizer tokenizer;
     private final File chatFile;
+    private final ConversationFileStore chatStore;
     private final String fablePrompt;
     private final String chatTemplate;
     private final ConversationHistory conversation =
@@ -71,6 +72,7 @@ public final class QwenEngine implements AutoCloseable {
         this.context = context.getApplicationContext();
         this.memory = new CorrectionMemory(this.context);
         this.chatFile = new File(this.context.getFilesDir(), CHAT_FILE);
+        this.chatStore = new ConversationFileStore(this.chatFile);
         this.fablePrompt = readTextAsset(this.context.getAssets(), "fable_for_qwen_v1.txt",
                 FALLBACK_SYSTEM_PROMPT);
 
@@ -420,51 +422,11 @@ public final class QwenEngine implements AutoCloseable {
     }
 
     private void loadConversation() {
-        if (!chatFile.exists()) return;
-
-        ArrayList<ConversationHistory.Turn> loaded = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                new FileInputStream(chatFile), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty()) continue;
-
-                JSONObject obj = new JSONObject(line);
-                String turnId = obj.optString("turn_id", "");
-                String role = obj.optString("role", "");
-                String content = obj.optString("content", "");
-
-                if (("user".equals(role) || "assistant".equals(role)) &&
-                        !content.trim().isEmpty()) {
-                    loaded.add(new ConversationHistory.Turn(turnId, role, content));
-                }
-            }
-            conversation.replaceAll(loaded);
-        } catch (Exception ignored) {
-            conversation.clear();
-        }
+        conversation.replaceAll(chatStore.load());
     }
 
     private void saveConversationLocked() throws Exception {
-        File tmp = new File(chatFile.getParentFile(), chatFile.getName() + ".tmp");
-        try (FileOutputStream out = new FileOutputStream(tmp, false)) {
-            for (ConversationHistory.Turn turn : conversation.snapshot()) {
-                JSONObject obj = new JSONObject();
-                obj.put("turn_id", turn.turnId);
-                obj.put("role", turn.role);
-                obj.put("content", turn.content);
-                out.write((obj.toString() + "\n").getBytes(StandardCharsets.UTF_8));
-            }
-            out.getFD().sync();
-        }
-
-        if (chatFile.exists() && !chatFile.delete()) {
-            throw new IllegalStateException("تعذر تحديث سجل المحادثة");
-        }
-        if (!tmp.renameTo(chatFile)) {
-            throw new IllegalStateException("تعذر حفظ سجل المحادثة");
-        }
+        chatStore.save(conversation.snapshot());
     }
 
     private static boolean containsStopMarker(StringBuilder raw) {
