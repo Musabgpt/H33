@@ -70,9 +70,6 @@ public final class CandidateCoordinator {
                     "none", statusFrom(ex.getCause(), "فشل نموذج المتصفح"));
         }
 
-        if (local.available && turnStore != null) {
-            turnStore.commit(turnId, q, local.answer);
-        }
 
         return new CandidateSet(turnId, q, local, web, hosted);
     }
