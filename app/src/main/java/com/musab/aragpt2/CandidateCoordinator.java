@@ -1,6 +1,8 @@
 package com.musab.aragpt2;
 
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 
 public final class CandidateCoordinator {
     @FunctionalInterface
@@ -44,32 +46,28 @@ public final class CandidateCoordinator {
             local = unavailableLocal(statusFrom(ex, "فشل الجواب المحلي"));
         }
 
-        AnswerCandidate web;
-        try {
-            web = webProvider.answer(q);
-            if (web == null) {
-                web = AnswerCandidate.unavailable(
-                        "web", AnswerCandidate.Kind.WEB,
-                        "web-evidence", "تعذر إنشاء جواب البحث");
-            }
-        } catch (Exception ex) {
-            web = AnswerCandidate.unavailable(
-                    "web", AnswerCandidate.Kind.WEB,
-                    "web-evidence", statusFrom(ex, "فشل البحث"));
-        }
+        FutureTask<AnswerCandidate> hostedTask =
+                new FutureTask<>(() -> resolveHosted(q));
+        Thread hostedThread =
+                new Thread(hostedTask, "h33-hosted-candidate");
+        hostedThread.setDaemon(true);
+        hostedThread.start();
+
+        AnswerCandidate web = resolveWeb(q);
 
         AnswerCandidate hosted;
         try {
-            hosted = hostedProvider.answer(q);
-            if (hosted == null) {
-                hosted = AnswerCandidate.unavailable(
-                        "hosted", AnswerCandidate.Kind.HOSTED,
-                        "none", "نموذج المتصفح غير متاح");
-            }
-        } catch (Exception ex) {
+            hosted = hostedTask.get();
+        } catch (InterruptedException ex) {
+            hostedThread.interrupt();
+            Thread.currentThread().interrupt();
             hosted = AnswerCandidate.unavailable(
                     "hosted", AnswerCandidate.Kind.HOSTED,
-                    "none", statusFrom(ex, "فشل نموذج المتصفح"));
+                    "none", "تم إيقاف جواب Google");
+        } catch (ExecutionException ex) {
+            hosted = AnswerCandidate.unavailable(
+                    "hosted", AnswerCandidate.Kind.HOSTED,
+                    "none", statusFrom(ex.getCause(), "فشل نموذج المتصفح"));
         }
 
         if (local.available && turnStore != null) {
@@ -77,6 +75,34 @@ public final class CandidateCoordinator {
         }
 
         return new CandidateSet(turnId, q, local, web, hosted);
+    }
+
+    private AnswerCandidate resolveWeb(String question) {
+        try {
+            AnswerCandidate web = webProvider.answer(question);
+            if (web != null) return web;
+            return AnswerCandidate.unavailable(
+                    "web", AnswerCandidate.Kind.WEB,
+                    "web-evidence", "تعذر إنشاء جواب البحث");
+        } catch (Exception ex) {
+            return AnswerCandidate.unavailable(
+                    "web", AnswerCandidate.Kind.WEB,
+                    "web-evidence", statusFrom(ex, "فشل البحث"));
+        }
+    }
+
+    private AnswerCandidate resolveHosted(String question) {
+        try {
+            AnswerCandidate hosted = hostedProvider.answer(question);
+            if (hosted != null) return hosted;
+            return AnswerCandidate.unavailable(
+                    "hosted", AnswerCandidate.Kind.HOSTED,
+                    "none", "نموذج المتصفح غير متاح");
+        } catch (Exception ex) {
+            return AnswerCandidate.unavailable(
+                    "hosted", AnswerCandidate.Kind.HOSTED,
+                    "none", statusFrom(ex, "فشل نموذج المتصفح"));
+        }
     }
 
     private static AnswerCandidate unavailableLocal(String status) {
