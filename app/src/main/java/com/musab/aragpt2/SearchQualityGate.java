@@ -18,7 +18,7 @@ public final class SearchQualityGate {
 
     private static final Set<String> AR_STOP = new HashSet<>(Arrays.asList(
             "من", "هو", "هي", "ما", "ماذا", "هل", "في", "على", "الى", "إلى",
-            "الحالي", "حاليا", "حالياً", "اليوم", "الآن", "الان"
+            "الحالي", "حالي", "حاليا", "حالياً", "اليوم", "يوم", "الآن", "الان"
     ));
 
     private static final Set<String> EN_STOP = new HashSet<>(Arrays.asList(
@@ -62,7 +62,10 @@ public final class SearchQualityGate {
             double bodyCoverage = coverage(queryTokens, bodyTokens);
             double score = Math.min(1.0, titleCoverage * 0.65 + bodyCoverage * 0.35);
 
-            if (queryTokens.isEmpty() || matched == 0 || score < 0.16) {
+            int requiredMatches = queryTokens.size() >= 2 ? 2 : 1;
+            if (queryTokens.isEmpty()
+                    || matched < requiredMatches
+                    || score < 0.16) {
                 rejected.add(raw.withRelevance(score));
                 continue;
             }
