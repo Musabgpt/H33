@@ -5,6 +5,7 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -79,7 +80,8 @@ public final class GoogleAiOverviewParser {
                 JSONObject source = array.optJSONObject(i);
                 if (source == null) continue;
 
-                String url = clean(source.optString("url", ""));
+                String url = externalSourceUrl(
+                        clean(source.optString("url", "")));
                 if (!isHttpUrl(url)) continue;
 
                 String key = normalizeUrl(url);
@@ -97,6 +99,65 @@ public final class GoogleAiOverviewParser {
 
     private static Result unavailable() {
         return new Result(false, "", Collections.emptyList());
+    }
+
+    private static String externalSourceUrl(String value) {
+        String raw = clean(value);
+        if (!isHttpUrl(raw)) return "";
+
+        try {
+            URI uri = URI.create(raw);
+            String host = clean(uri.getHost()).toLowerCase(Locale.ROOT);
+            if (host.startsWith("www.")) host = host.substring(4);
+
+            boolean googleHost = host.equals("google.com")
+                    || host.endsWith(".google.com")
+                    || host.equals("google.co.uk")
+                    || host.endsWith(".google.co.uk");
+
+            if (!googleHost) return raw;
+
+            String path = clean(uri.getPath());
+            if (!"/url".equals(path)) return "";
+
+            String query = uri.getRawQuery();
+            if (query == null || query.isEmpty()) return "";
+
+            for (String part : query.split("&")) {
+                int eq = part.indexOf('=');
+                if (eq <= 0) continue;
+                String name = part.substring(0, eq);
+                if (!"q".equals(name) && !"url".equals(name)) continue;
+
+                String encoded = part.substring(eq + 1);
+                String target;
+                try {
+                    target = java.net.URLDecoder.decode(
+                            encoded, StandardCharsets.UTF_8.name());
+                } catch (Exception ignored) {
+                    target = encoded;
+                }
+
+                if (isHttpUrl(target)) {
+                    URI targetUri = URI.create(target);
+                    String targetHost = clean(targetUri.getHost())
+                            .toLowerCase(Locale.ROOT);
+                    if (targetHost.startsWith("www.")) {
+                        targetHost = targetHost.substring(4);
+                    }
+                    if (!targetHost.equals("google.com")
+                            && !targetHost.endsWith(".google.com")
+                            && !targetHost.equals("google.co.uk")
+                            && !targetHost.endsWith(".google.co.uk")) {
+                        return target;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            return "";
+        }
+
+        return "";
     }
 
     private static boolean isHttpUrl(String value) {
