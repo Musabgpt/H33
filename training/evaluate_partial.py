@@ -18,7 +18,11 @@ import unicodedata
 from pathlib import Path
 from statistics import mean
 
-from training.train_partial_sft import BASE_MODEL, build_masked_sequence
+from training.train_partial_sft import (
+    BASE_MODEL,
+    build_masked_sequence,
+    model_dtype_kwargs,
+)
 
 
 _ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
@@ -275,6 +279,7 @@ def _evaluate_model_source(
 ) -> dict:
     try:
         import torch
+        import transformers
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except ImportError as exc:
         raise SystemExit(
@@ -297,7 +302,7 @@ def _evaluate_model_source(
 
     model = AutoModelForCausalLM.from_pretrained(
         model_source,
-        torch_dtype=dtype,
+        **model_dtype_kwargs(transformers.__version__, dtype),
     )
     model.config.use_cache = True
     model.to(device)
