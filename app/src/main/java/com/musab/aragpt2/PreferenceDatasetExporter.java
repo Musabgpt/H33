@@ -19,6 +19,11 @@ public final class PreferenceDatasetExporter {
                 row.put("id", record.turnId);
                 row.put("prompt", prompt);
                 row.put("response", answer);
+                row.put("memory_semantics", record.memorySemantics);
+                row.put("conflict_status", record.conflictStatus);
+                row.put("freshness_class", record.freshnessClass);
+                row.put("selected_provenance", record.selectedProvenance);
+                row.put("training_eligible", record.trainingEligible);
             } catch (Exception ex) {
                 throw new IllegalStateException("تعذر تكوين سجل SFT", ex);
             }
@@ -57,6 +62,10 @@ public final class PreferenceDatasetExporter {
                                     ? "user_correction"
                                     : record.candidateId);
                     row.put("rejected_source", candidate.id);
+                    row.put("memory_semantics", record.memorySemantics);
+                    row.put("conflict_status", record.conflictStatus);
+                    row.put("freshness_class", record.freshnessClass);
+                    row.put("training_eligible", record.trainingEligible);
                 } catch (Exception ex) {
                     throw new IllegalStateException(
                             "تعذر تكوين سجل preference", ex);
