@@ -43,7 +43,7 @@ public class CandidateCoordinatorTest {
     }
 
     @Test
-    public void webFailureDoesNotDiscardLocalCandidate() throws Exception {
+    public void webFailureDoesNotCommitLocalCandidateBeforeSelection() throws Exception {
         LocalAnswerProvider local = (q, listener) ->
                 ok("local", AnswerCandidate.Kind.LOCAL, "جواب محلي");
         WebEvidenceAnswerProvider web = q -> {
@@ -63,7 +63,7 @@ public class CandidateCoordinatorTest {
 
         assertTrue(set.local.available);
         assertFalse(set.web.available);
-        assertTrue(commits.get() == 1);
+        assertTrue(commits.get() == 0);
     }
 
     @Test
