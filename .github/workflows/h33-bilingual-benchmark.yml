@@ -6,11 +6,13 @@ on:
     branches: [h33-three-candidate-native]
     paths:
       - 'benchmarks/h33_bilingual_benchmark.py'
+      - 'benchmarks/test_h33_bilingual_benchmark.py'
       - '.github/workflows/h33-bilingual-benchmark.yml'
   push:
     branches: [exp-bilingual-eval]
     paths:
       - 'benchmarks/h33_bilingual_benchmark.py'
+      - 'benchmarks/test_h33_bilingual_benchmark.py'
       - '.github/workflows/h33-bilingual-benchmark.yml'
 
 jobs:
@@ -31,12 +33,21 @@ jobs:
           pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1"
           pip install "transformers==5.14.1" "datasets>=4,<5" "huggingface-hub>=1.5,<2" "numpy<2" sentencepiece
 
-      - name: Reproduce benchmark encoding contract\n        run: |\n          cd benchmarks\n          python -m unittest -v test_h33_bilingual_benchmark.py\n\n      - name: Run real Qwen2.5-0.5B benchmark
+      - name: Reproduce benchmark encoding contract
+        run: |
+          cd benchmarks
+          python -m unittest -v test_h33_bilingual_benchmark.py
+
+      - name: Run real Qwen2.5-0.5B benchmark
         env:
           TOKENIZERS_PARALLELISM: 'false'
           HF_HUB_DISABLE_XET: '1'
         run: |
-          python benchmarks/h33_bilingual_benchmark.py             --per-domain 8             --judge-cases 160             --out artifacts/h33-bilingual-benchmark | tee artifacts-benchmark.log
+          set -o pipefail
+          python benchmarks/h33_bilingual_benchmark.py \
+            --per-domain 8 \
+            --judge-cases 160 \
+            --out artifacts/h33-bilingual-benchmark | tee artifacts-benchmark.log
 
       - name: Show benchmark summary
         if: always()
