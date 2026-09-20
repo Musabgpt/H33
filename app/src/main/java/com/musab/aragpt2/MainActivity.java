@@ -45,8 +45,11 @@ public class MainActivity extends AppCompatActivity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     private QwenEngine engine;
+    private LocalInferenceEngine localInference;
+    private TranslationBridge translationBridge;
     private CandidateCoordinator candidateCoordinator;
     private PreferenceStore preferenceStore;
+    private UserDecisionService userDecisionService;
     private LinearLayout rootLayout;
     private TextView status;
     private ScrollView chatScroll;
@@ -86,24 +89,56 @@ public class MainActivity extends AppCompatActivity {
         executor.execute(() -> {
             try {
                 engine = new QwenEngine(this);
+                localInference = new OrtGenAiLocalInferenceEngine(engine);
+                translationBridge = new MlKitTranslationBridge();
                 preferenceStore = new PreferenceStore(this);
+                userDecisionService = new UserDecisionService(
+                        preferenceStore,
+                        new UserDecisionService.CanonicalMemory() {
+                            @Override
+                            public String get(String turnId) {
+                                return engine.getCanonicalAnswer(turnId);
+                            }
+
+                            @Override
+                            public void commit(
+                                    String turnId, String question, String answer)
+                                    throws Exception {
+                                engine.commitCanonicalTurn(turnId, question, answer);
+                            }
+
+                            @Override
+                            public boolean replace(String turnId, String answer)
+                                    throws Exception {
+                                return engine.replaceCanonicalAnswer(turnId, answer);
+                            }
+
+                            @Override
+                            public boolean remove(String turnId) throws Exception {
+                                return engine.removeCanonicalTurn(turnId);
+                            }
+                        }
+                );
                 candidateCoordinator = new CandidateCoordinator(
-                        new QwenLocalAnswerProvider(engine, 192),
-                        new QwenWebEvidenceAnswerProvider(engine, 5, 192),
-                        new GoogleAiOverviewProvider(this),
-                        engine::commitCanonicalTurn
+                        new PivotingLocalAnswerProvider(
+                                localInference, translationBridge, 192),
+                        new QwenWebEvidenceAnswerProvider(
+                                localInference,
+                                new WebEvidenceRetriever(5),
+                                translationBridge,
+                                192),
+                        new GoogleAiOverviewProvider(this)
                 );
 
                 List<QwenEngine.ChatTurn> turns = engine.getConversationSnapshot();
-                int learned = engine.memoryCount();
                 int preferences = preferenceStore.eventCount();
 
                 runOnUiThread(() -> {
                     messagesContainer.removeAllViews();
                     if (turns.isEmpty()) addWelcomeMessage();
                     else renderConversation(turns);
-                    setBusy(false, "جاهز • Fable v1 • ذاكرة: " + learned +
-                            " • اختيارات: " + preferences);
+                    setBusy(false, "جاهز • Evidence-first • ذاكرة مستخدم: "
+                            + preferences);
                 });
             } catch (Exception ex) {
                 runOnUiThread(() -> {
@@ -476,11 +511,8 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                commitDecisionWithPreference(
-                        set,
-                        candidate.answer,
-                        () -> preferenceStore.recordSelection(set, candidate.id)
-                );
+                UserDecisionService.Result decision =
+                        userDecisionService.select(set, candidate.id);
 
                 String savedPath =
                         saveRequestedTextSilently(set.question, candidate.answer);
@@ -491,10 +523,13 @@ public class MainActivity extends AppCompatActivity {
                         status.setText("تم الحفظ لكن حالة الواجهة تغيّرت");
                         return;
                     }
-                    selectedStatus.setText("✓ الجواب المعتمد: " + label);
+                    selectedStatus.setText(
+                            decision.hasFreshEvidenceConflict()
+                                    ? "⚠ اختيارك محفوظ، لكنه يختلف عن أدلة حديثة"
+                                    : "✓ اختيارك محفوظ كذاكرة معتمدة: " + label);
                     lastAssistantAnswer = candidate.answer;
                     status.setText(savedPath.isEmpty()
-                            ? "تم حفظ اختيارك للتعلم"
+                            ? "تم حفظ اختيارك كذاكرة معتمدة من المستخدم"
                             : "تم حفظ اختيارك • 💾 " + savedPath);
                     scrollToBottom();
                 });
@@ -542,17 +577,8 @@ public class MainActivity extends AppCompatActivity {
 
                     executor.execute(() -> {
                         try {
-                            commitDecisionWithPreference(
-                                    set,
-                                    better,
-                                    () -> preferenceStore.recordCorrection(set, better)
-                            );
-
-                            try {
-                                engine.rememberCorrect(set.question, better);
-                            } catch (Exception ignoredMemoryError) {
-                                // Preference data and canonical chat remain the durable truth.
-                            }
+                            UserDecisionService.Result decision =
+                                    userDecisionService.correct(set, better);
 
                             String savedPath =
                                     saveRequestedTextSilently(set.question, better);
@@ -561,10 +587,12 @@ public class MainActivity extends AppCompatActivity {
                                 decisionBusy[0] = false;
                                 state.correct(better);
                                 selectedStatus.setText(
-                                        "✓ تصحيحك هو الجواب المعتمد");
+                                        decision.hasFreshEvidenceConflict()
+                                                ? "⚠ تصحيحك محفوظ، لكنه يختلف عن أدلة حديثة"
+                                                : "✓ تصحيحك محفوظ كذاكرة معتمدة");
                                 lastAssistantAnswer = better;
                                 status.setText(savedPath.isEmpty()
-                                        ? "تم حفظ تصحيحك للتعلم"
+                                        ? "تم حفظ تصحيحك في buffer التعلم"
                                         : "تم حفظ تصحيحك • 💾 " + savedPath);
                                 dialog.dismiss();
                                 scrollToBottom();
@@ -588,64 +616,6 @@ public class MainActivity extends AppCompatActivity {
                 }));
 
         dialog.show();
-    }
-
-    @FunctionalInterface
-    private interface PreferenceWrite {
-        void write() throws Exception;
-    }
-
-    private void commitDecisionWithPreference(
-            CandidateSet set,
-            String answer,
-            PreferenceWrite preferenceWrite) throws Exception {
-
-        if (preferenceStore == null) {
-            throw new IllegalStateException("PreferenceStore غير جاهز");
-        }
-        if (engine == null) {
-            throw new IllegalStateException("QwenEngine غير جاهز");
-        }
-
-        String previous = engine.getCanonicalAnswer(set.turnId);
-        boolean hadPrevious = previous != null && !previous.trim().isEmpty();
-        boolean canonicalChanged = false;
-
-        try {
-            if (hadPrevious) {
-                boolean replaced =
-                        engine.replaceCanonicalAnswer(set.turnId, answer);
-                if (!replaced) {
-                    throw new IllegalStateException(
-                            "تعذر العثور على turn لاعتماد الجواب");
-                }
-            } else {
-                engine.commitCanonicalTurn(
-                        set.turnId, set.question, answer);
-            }
-            canonicalChanged = true;
-
-            preferenceWrite.write();
-        } catch (Exception ex) {
-            if (canonicalChanged) {
-                try {
-                    if (hadPrevious) {
-                        boolean restored =
-                                engine.replaceCanonicalAnswer(
-                                        set.turnId, previous);
-                        if (!restored) {
-                            throw new IllegalStateException(
-                                    "تعذر استعادة الجواب السابق");
-                        }
-                    } else {
-                        engine.removeCanonicalTurn(set.turnId);
-                    }
-                } catch (Exception rollbackError) {
-                    ex.addSuppressed(rollbackError);
-                }
-            }
-            throw ex;
-        }
     }
 
     private void setButtonsEnabled(List<Button> buttons, boolean enabled) {
@@ -681,7 +651,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void stopGeneration() {
         if (!busy || engine == null) return;
-        engine.cancelGeneration();
+        if (localInference != null) localInference.cancel();
+        else engine.cancelGeneration();
         status.setText("جارٍ إيقاف التوليد…");
         stopButton.setEnabled(false);
     }
@@ -702,8 +673,8 @@ public class MainActivity extends AppCompatActivity {
                     engine.newConversation();
                     int choices = preferenceStore == null ? 0 : preferenceStore.eventCount();
                     runOnUiThread(() ->
-                            setBusy(false, "جاهز • Fable v1 • ذاكرة: " +
-                                    engine.memoryCount() + " • اختيارات: " + choices));
+                            setBusy(false, "جاهز • Evidence-first • ذاكرة مستخدم: "
+                                    + choices));
                 } catch (Exception ex) {
                     runOnUiThread(() ->
                             status.setText("تعذر بدء محادثة جديدة: " + safeMessage(ex)));
@@ -954,7 +925,7 @@ public class MainActivity extends AppCompatActivity {
         title.setGravity(Gravity.CENTER);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Fable-for-Qwen v1 • محلي • بحث ويب • إنشاء TXT");
+        subtitle.setText("Local Qwen • Web Evidence • User-approved memory");
         subtitle.setTextSize(14f);
         subtitle.setAlpha(0.75f);
         subtitle.setGravity(Gravity.CENTER);
@@ -996,7 +967,16 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         generationId++;
-        if (engine != null) engine.cancelGeneration();
+        if (localInference != null) localInference.cancel();
+        else if (engine != null) engine.cancelGeneration();
+
+        if (translationBridge != null) {
+            try {
+                translationBridge.close();
+            } catch (Exception ignored) {
+            }
+        }
+
         executor.shutdownNow();
 
         if (engine != null) {
