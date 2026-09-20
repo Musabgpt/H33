@@ -44,9 +44,8 @@ import java.util.concurrent.Executors;
 public class MainActivity extends AppCompatActivity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
-    private QwenEngine engine;
+    private CodeModelEngine engine;
     private LocalInferenceEngine localInference;
-    private TranslationBridge translationBridge;
     private CandidateCoordinator candidateCoordinator;
     private PreferenceStore preferenceStore;
     private UserDecisionService userDecisionService;
@@ -83,14 +82,13 @@ public class MainActivity extends AppCompatActivity {
         installInsetsHandling();
         addWelcomeMessage();
 
-        setBusy(true, "جاري تحميل Qwen2.5 INT4 + Fable v1…");
+        setBusy(true, "جاري تحميل DeepSeek-Coder 1.3B INT4…");
         stopButton.setVisibility(View.GONE);
 
         executor.execute(() -> {
             try {
-                engine = new QwenEngine(this);
+                engine = new CodeModelEngine(this);
                 localInference = new OrtGenAiLocalInferenceEngine(engine);
-                translationBridge = new MlKitTranslationBridge();
                 preferenceStore = new PreferenceStore(this);
                 userDecisionService = new UserDecisionService(
                         preferenceStore,
@@ -120,29 +118,26 @@ public class MainActivity extends AppCompatActivity {
                         }
                 );
                 candidateCoordinator = new CandidateCoordinator(
-                        new PivotingLocalAnswerProvider(
-                                localInference, translationBridge, 192),
-                        new QwenWebEvidenceAnswerProvider(
-                                localInference,
-                                new WebEvidenceRetriever(5),
-                                translationBridge,
-                                192),
+                        new DeepSeekCoderLocalAnswerProvider(
+                                localInference, 320),
+                        new ExtractiveWebEvidenceAnswerProvider(
+                                new WebEvidenceRetriever(5)),
                         new GoogleAiOverviewProvider(this)
                 );
 
-                List<QwenEngine.ChatTurn> turns = engine.getConversationSnapshot();
+                List<CodeModelEngine.ChatTurn> turns = engine.getConversationSnapshot();
                 int preferences = preferenceStore.eventCount();
 
                 runOnUiThread(() -> {
                     messagesContainer.removeAllViews();
                     if (turns.isEmpty()) addWelcomeMessage();
                     else renderConversation(turns);
-                    setBusy(false, "جاهز • Evidence-first • ذاكرة مستخدم: "
+                    setBusy(false, "جاهز • DeepSeek Python • ذاكرة مستخدم: "
                             + preferences);
                 });
             } catch (Exception ex) {
                 runOnUiThread(() -> {
-                    setBusy(true, "تعذر تحميل Qwen: " + safeMessage(ex));
+                    setBusy(true, "تعذر تحميل DeepSeek-Coder: " + safeMessage(ex));
                     newChatButton.setEnabled(true);
                 });
             }
@@ -674,7 +669,7 @@ public class MainActivity extends AppCompatActivity {
                     engine.newConversation();
                     int choices = preferenceStore == null ? 0 : preferenceStore.eventCount();
                     runOnUiThread(() ->
-                            setBusy(false, "جاهز • Evidence-first • ذاكرة مستخدم: "
+                            setBusy(false, "جاهز • DeepSeek Python • ذاكرة مستخدم: "
                                     + choices));
                 } catch (Exception ex) {
                     runOnUiThread(() ->
@@ -684,8 +679,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void renderConversation(List<QwenEngine.ChatTurn> turns) {
-        for (QwenEngine.ChatTurn turn : turns) {
+    private void renderConversation(List<CodeModelEngine.ChatTurn> turns) {
+        for (CodeModelEngine.ChatTurn turn : turns) {
             if ("user".equals(turn.role)) {
                 addUserBubble(turn.content);
             } else if ("assistant".equals(turn.role)) {
@@ -920,13 +915,13 @@ public class MainActivity extends AppCompatActivity {
         wrapper.setPadding(dp(20), dp(28), dp(20), dp(18));
 
         TextView title = new TextView(this);
-        title.setText("H33 Qwen2.5");
+        title.setText("H33 DeepSeek Coder");
         title.setTextSize(25f);
         title.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
         title.setGravity(Gravity.CENTER);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Local Qwen • Web Evidence • User-approved memory");
+        subtitle.setText("DeepSeek-Coder 1.3B • Python • Web Evidence • Google");
         subtitle.setTextSize(14f);
         subtitle.setAlpha(0.75f);
         subtitle.setGravity(Gravity.CENTER);
@@ -970,13 +965,6 @@ public class MainActivity extends AppCompatActivity {
         generationId++;
         if (localInference != null) localInference.cancel();
         else if (engine != null) engine.cancelGeneration();
-
-        if (translationBridge != null) {
-            try {
-                translationBridge.close();
-            } catch (Exception ignored) {
-            }
-        }
 
         executor.shutdownNow();
 
