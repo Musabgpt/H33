@@ -9,7 +9,8 @@ import java.util.List;
 import java.util.UUID;
 
 public final class PreferenceRecord {
-    public static final int SCHEMA_VERSION = 1;
+    public static final int SCHEMA_VERSION = 2;
+    private static final int LEGACY_SCHEMA_VERSION = 1;
 
     public static final class CandidateSnapshot {
         public final String id;
@@ -106,6 +107,12 @@ public final class PreferenceRecord {
     public final String candidateId;
     public final String correction;
 
+    public final String memorySemantics;
+    public final String conflictStatus;
+    public final String freshnessClass;
+    public final String selectedProvenance;
+    public final boolean trainingEligible;
+
     private PreferenceRecord(
             int schemaVersion,
             String id,
@@ -115,7 +122,12 @@ public final class PreferenceRecord {
             List<CandidateSnapshot> candidates,
             String selectionType,
             String candidateId,
-            String correction) {
+            String correction,
+            String memorySemantics,
+            String conflictStatus,
+            String freshnessClass,
+            String selectedProvenance,
+            boolean trainingEligible) {
         this.schemaVersion = schemaVersion;
         this.id = clean(id);
         this.timestampMs = timestampMs;
@@ -125,33 +137,81 @@ public final class PreferenceRecord {
         this.selectionType = clean(selectionType);
         this.candidateId = clean(candidateId);
         this.correction = clean(correction);
+        this.memorySemantics = clean(memorySemantics);
+        this.conflictStatus = clean(conflictStatus);
+        this.freshnessClass = clean(freshnessClass);
+        this.selectedProvenance = clean(selectedProvenance);
+        this.trainingEligible = trainingEligible;
     }
 
     public static PreferenceRecord selection(
             CandidateSet set, String candidateId, long timestampMs) {
+        return selection(
+                set, candidateId, timestampMs, MemoryConflictStatus.NONE);
+    }
+
+    public static PreferenceRecord selection(
+            CandidateSet set,
+            String candidateId,
+            long timestampMs,
+            MemoryConflictStatus conflictStatus) {
         if (set == null) throw new IllegalArgumentException("candidate set required");
         AnswerCandidate selected = set.byId(candidateId);
         if (selected == null || !selected.available) {
             throw new IllegalArgumentException("selected candidate unavailable");
         }
-        return create(set, "candidate", selected.id, "", timestampMs);
+        return create(
+                set,
+                "candidate",
+                selected.id,
+                "",
+                timestampMs,
+                conflictStatus,
+                selected.provider
+        );
     }
 
     public static PreferenceRecord correction(
             CandidateSet set, String correction, long timestampMs) {
+        return correction(
+                set, correction, timestampMs, MemoryConflictStatus.NONE);
+    }
+
+    public static PreferenceRecord correction(
+            CandidateSet set,
+            String correction,
+            long timestampMs,
+            MemoryConflictStatus conflictStatus) {
         if (set == null) throw new IllegalArgumentException("candidate set required");
         String answer = clean(correction);
         if (answer.isEmpty()) throw new IllegalArgumentException("correction required");
-        return create(set, "user_correction", "", answer, timestampMs);
+        return create(
+                set,
+                "user_correction",
+                "",
+                answer,
+                timestampMs,
+                conflictStatus,
+                "user_correction"
+        );
     }
 
     private static PreferenceRecord create(
-            CandidateSet set, String selectionType, String candidateId,
-            String correction, long timestampMs) {
+            CandidateSet set,
+            String selectionType,
+            String candidateId,
+            String correction,
+            long timestampMs,
+            MemoryConflictStatus conflictStatus,
+            String selectedProvenance) {
         ArrayList<CandidateSnapshot> snapshots = new ArrayList<>();
         for (AnswerCandidate candidate : set.all()) {
             snapshots.add(CandidateSnapshot.fromCandidate(candidate));
         }
+
+        MemoryConflictStatus safeConflict = conflictStatus == null
+                ? MemoryConflictStatus.NONE : conflictStatus;
+
         return new PreferenceRecord(
                 SCHEMA_VERSION,
                 UUID.randomUUID().toString(),
@@ -161,7 +221,12 @@ public final class PreferenceRecord {
                 snapshots,
                 selectionType,
                 candidateId,
-                correction
+                correction,
+                "user_approved",
+                safeConflict.name(),
+                FreshnessPolicy.classify(set.question).name(),
+                selectedProvenance,
+                true
         );
     }
 
@@ -187,7 +252,7 @@ public final class PreferenceRecord {
 
     public String toJson() throws Exception {
         JSONObject obj = new JSONObject();
-        obj.put("schema_version", schemaVersion);
+        obj.put("schema_version", SCHEMA_VERSION);
         obj.put("id", id);
         obj.put("timestamp_ms", timestampMs);
         obj.put("turn_id", turnId);
@@ -213,13 +278,19 @@ public final class PreferenceRecord {
         } else {
             obj.put("correction", correction);
         }
+
+        obj.put("memory_semantics", memorySemantics);
+        obj.put("conflict_status", conflictStatus);
+        obj.put("freshness_class", freshnessClass);
+        obj.put("selected_provenance", selectedProvenance);
+        obj.put("training_eligible", trainingEligible);
         return obj.toString();
     }
 
     public static PreferenceRecord fromJson(String json) throws Exception {
         JSONObject obj = new JSONObject(json);
         int schema = obj.optInt("schema_version", 0);
-        if (schema != SCHEMA_VERSION) {
+        if (schema != LEGACY_SCHEMA_VERSION && schema != SCHEMA_VERSION) {
             throw new IllegalArgumentException("unsupported schema version");
         }
 
@@ -242,24 +313,57 @@ public final class PreferenceRecord {
 
         String correction = obj.isNull("correction")
                 ? "" : obj.optString("correction", "");
+        String question = obj.optString("question", "");
+
+        String provenance = obj.optString("selected_provenance", "");
+        if (provenance.isEmpty()) {
+            provenance = legacyProvenance(
+                    selectionType, candidateId, candidates);
+        }
 
         PreferenceRecord record = new PreferenceRecord(
-                schema,
+                SCHEMA_VERSION,
                 obj.optString("id", ""),
                 obj.optLong("timestamp_ms", 0L),
                 obj.optString("turn_id", ""),
-                obj.optString("question", ""),
+                question,
                 candidates,
                 selectionType,
                 candidateId,
-                correction
+                correction,
+                obj.optString("memory_semantics", "user_approved"),
+                obj.optString(
+                        "conflict_status",
+                        MemoryConflictStatus.NONE.name()),
+                obj.optString(
+                        "freshness_class",
+                        FreshnessPolicy.classify(question).name()),
+                provenance,
+                obj.optBoolean("training_eligible", true)
         );
 
-        if (record.turnId.isEmpty() || record.question.isEmpty() ||
-                record.effectiveAnswer().isEmpty()) {
+        if (record.turnId.isEmpty() || record.question.isEmpty()
+                || record.effectiveAnswer().isEmpty()) {
             throw new IllegalArgumentException("invalid preference record");
         }
         return record;
+    }
+
+    private static String legacyProvenance(
+            String selectionType,
+            String candidateId,
+            List<CandidateSnapshot> candidates) {
+        if ("user_correction".equals(selectionType)) {
+            return "user_correction";
+        }
+        if ("candidate".equals(selectionType)) {
+            for (CandidateSnapshot candidate : candidates) {
+                if (candidate.id.equals(candidateId)) {
+                    return candidate.provider;
+                }
+            }
+        }
+        return "";
     }
 
     private static String clean(String value) {
