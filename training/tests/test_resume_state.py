@@ -4,6 +4,7 @@ from training.train_partial_sft import (
     ResumeCursor,
     build_epoch_order,
     cursor_after_optimizer_step,
+    optimizer_step_groups,
 )
 
 
@@ -85,6 +86,34 @@ class ResumeStateTest(unittest.TestCase):
         self.assertEqual(first, again)
         self.assertNotEqual(first, next_epoch)
         self.assertEqual(list(range(10)), sorted(first))
+
+    def test_optimizer_groups_reset_accumulation_after_partial_epoch_flush(self):
+        self.assertEqual(
+            [(0, 5)],
+            optimizer_step_groups(
+                order_length=5,
+                start_offset=0,
+                gradient_accumulation_steps=16,
+            ),
+        )
+
+        self.assertEqual(
+            [(4, 8), (8, 10)],
+            optimizer_step_groups(
+                order_length=10,
+                start_offset=4,
+                gradient_accumulation_steps=4,
+            ),
+        )
+
+    def test_optimizer_groups_reject_invalid_resume_offset(self):
+        with self.assertRaises(ValueError):
+            optimizer_step_groups(
+                order_length=5,
+                start_offset=6,
+                gradient_accumulation_steps=2,
+            )
+
 
 
 if __name__ == "__main__":
