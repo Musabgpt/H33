@@ -111,10 +111,11 @@ public final class WebEvidenceRetriever {
     }
 
     private static String dedupeKey(SearchResult result) {
+        String host = clean(result.host).toLowerCase(Locale.ROOT);
+        if (!host.isEmpty()) return "host:" + host;
         String url = clean(result.url).toLowerCase(Locale.ROOT);
         if (!url.isEmpty()) return "url:" + url;
-        return "host:" + clean(result.host).toLowerCase(Locale.ROOT)
-                + "|title:" + clean(result.title).toLowerCase(Locale.ROOT);
+        return "title:" + clean(result.title).toLowerCase(Locale.ROOT);
     }
 
     private enum Provider {
