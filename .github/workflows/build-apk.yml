@@ -3,7 +3,10 @@ name: Build H33 Qwen2.5 INT4 APK
 on:
   workflow_dispatch:
   push:
-    branches: [qwen2.5-mobile]
+    branches: [qwen2.5-mobile, 'h33-*']
+concurrency:
+  group: h33-qwen-v2-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -12,6 +15,41 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Download verified ORT GenAI Android AAR
+        run: |
+          mkdir -p app/libs
+          curl -L --fail --retry 3 \
+            https://github.com/microsoft/onnxruntime-genai/releases/download/v0.15.2/onnxruntime-genai-android-0.15.2.aar \
+            -o app/libs/onnxruntime-genai.aar
+          echo "f507ddbf0f635554ab12fcbf7dcfb115981eb664b925d90f28ed598dd8eb2ee7  app/libs/onnxruntime-genai.aar" | sha256sum -c -
+
+      - name: Install Android platform
+        run: |
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager 2>/dev/null | sort | tail -n 1)"
+          fi
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Run deterministic Android JVM tests
+        run: gradle :app:testDebugUnitTest --stacktrace
+
+      - name: Run Android lint
+        run: gradle :app:lintDebug --stacktrace
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,7 +66,12 @@ jobs:
         run: |
           rm -rf app/src/main/assets/model
           mkdir -p app/src/main/assets/model
-          python -m onnxruntime_genai.models.builder             -m Qwen/Qwen2.5-0.5B-Instruct             -o app/src/main/assets/model             -p int4             -e cpu             --extra_options hf_remote=false hf_token=false
+          python -m onnxruntime_genai.models.builder \
+            -m Qwen/Qwen2.5-0.5B-Instruct \
+            -o app/src/main/assets/model \
+            -p int4 \
+            -e cpu \
+            --extra_options hf_remote=false hf_token=false
 
       - name: Inspect model package
         run: |
@@ -39,7 +82,7 @@ jobs:
       - name: Arabic Qwen smoke test
         run: python scripts/smoke_qwen_genai.py
 
-      - name: Real web backend smoke test
+      - name: Web connectivity smoke test
         run: |
           python - <<'PY'
           import urllib.request
@@ -56,40 +99,13 @@ jobs:
                   return r.read(500000).decode("utf-8", "ignore")
 
           rss = get("https://www.bing.com/search?q=OpenAI&format=rss&setlang=en")
-          assert "<item>" in rss.lower(), "Bing RSS returned no search items"
+          assert "<item>" in rss.lower(), "Bing RSS connectivity returned no items"
 
           page = get("https://example.com/")
-          assert "Example Domain" in page, "Direct HTTPS page fetch failed"
+          assert "Example Domain" in page, "Direct HTTPS connectivity failed"
 
-          print("WEB_BACKEND_SMOKE_OK")
+          print("WEB_CONNECTIVITY_SMOKE_OK")
           PY
-
-      - name: Download verified ORT GenAI Android AAR
-        run: |
-          mkdir -p app/libs
-          curl -L --fail --retry 3             https://github.com/microsoft/onnxruntime-genai/releases/download/v0.15.2/onnxruntime-genai-android-0.15.2.aar             -o app/libs/onnxruntime-genai.aar
-          echo "f507ddbf0f635554ab12fcbf7dcfb115981eb664b925d90f28ed598dd8eb2ee7  app/libs/onnxruntime-genai.aar" | sha256sum -c -
-
-      - name: Install Android platform
-        run: |
-          SDKMANAGER="$(command -v sdkmanager || true)"
-          if [ -z "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$ANDROID_HOME" -type f -name sdkmanager 2>/dev/null | sort | tail -n 1)"
-          fi
-          test -n "$SDKMANAGER"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.6.0'
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace

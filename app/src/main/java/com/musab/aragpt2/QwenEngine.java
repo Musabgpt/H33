@@ -30,12 +30,18 @@ public final class QwenEngine implements AutoCloseable {
     }
 
     public static final class ChatTurn {
+        public final String turnId;
         public final String role;
         public final String content;
 
         ChatTurn(String role, String content) {
-            this.role = role;
-            this.content = content;
+            this("", role, content);
+        }
+
+        ChatTurn(String turnId, String role, String content) {
+            this.turnId = turnId == null ? "" : turnId;
+            this.role = role == null ? "" : role;
+            this.content = content == null ? "" : content;
         }
     }
 
@@ -54,9 +60,11 @@ public final class QwenEngine implements AutoCloseable {
     private final Model model;
     private final Tokenizer tokenizer;
     private final File chatFile;
+    private final ConversationFileStore chatStore;
     private final String fablePrompt;
     private final String chatTemplate;
-    private final ArrayList<ChatTurn> conversation = new ArrayList<>();
+    private final ConversationHistory conversation =
+            new ConversationHistory(MAX_HISTORY_MESSAGES);
 
     private volatile boolean cancelRequested = false;
 
@@ -64,6 +72,7 @@ public final class QwenEngine implements AutoCloseable {
         this.context = context.getApplicationContext();
         this.memory = new CorrectionMemory(this.context);
         this.chatFile = new File(this.context.getFilesDir(), CHAT_FILE);
+        this.chatStore = new ConversationFileStore(this.chatFile);
         this.fablePrompt = readTextAsset(this.context.getAssets(), "fable_for_qwen_v1.txt",
                 FALLBACK_SYSTEM_PROMPT);
 
@@ -82,40 +91,57 @@ public final class QwenEngine implements AutoCloseable {
 
     public String generateStream(String question, int maxNewTokens, String webContext,
                                  StreamListener listener) throws Exception {
+        String answer = generateCandidate(
+                question,
+                maxNewTokens,
+                webContext,
+                webContext != null && !webContext.trim().isEmpty(),
+                listener
+        );
+
+        String q = question == null ? "" : question.trim();
+        if (!q.isEmpty() && !answer.isEmpty()) {
+            commitCanonicalTurn(java.util.UUID.randomUUID().toString(), q, answer);
+        }
+        return answer;
+    }
+
+    public String generateCandidate(String question, int maxNewTokens, String evidenceContext,
+                                    boolean evidenceOnly, StreamListener listener) throws Exception {
         String q = question == null ? "" : question.trim();
         if (q.isEmpty()) return "";
 
         cancelRequested = false;
 
-        boolean hasWeb = webContext != null && !webContext.trim().isEmpty();
+        String fittedEvidence =
+                evidenceContext == null ? "" : evidenceContext.trim();
+        boolean hasEvidence = !fittedEvidence.isEmpty();
+
+        if (evidenceOnly && hasEvidence) {
+            fittedEvidence =
+                    "EVIDENCE_ONLY: أجب فقط مما تدعمه النتائج التالية. " +
+                    "إذا لم تكفِ النتائج، قل بوضوح إن الأدلة غير كافية. " +
+                    "لا تستخدم معرفتك الداخلية لتعويض نقص الأدلة.\n" +
+                    fittedEvidence;
+        }
 
         String exact = memory.exactAnswer(q);
-        if (!hasWeb && exact != null && !exact.isEmpty()) {
-            synchronized (conversation) {
-                conversation.add(new ChatTurn("user", q));
-                conversation.add(new ChatTurn("assistant", exact));
-                trimConversationInMemory();
-                saveConversationLocked();
-            }
+        if (!hasEvidence && exact != null && !exact.isEmpty()) {
             if (listener != null) listener.onUpdate(exact);
             return exact;
         }
 
-        List<ChatTurn> snapshot;
-        synchronized (conversation) {
-            snapshot = new ArrayList<>(conversation);
-        }
-
+        List<ChatTurn> snapshot = getConversationSnapshot();
         StringBuilder raw = new StringBuilder();
 
-        try (Sequences encoded = encodeTrimmedPrompt(snapshot, q, webContext)) {
+        try (Sequences encoded = encodeTrimmedPrompt(snapshot, q, fittedEvidence)) {
             int[] inputIds = encoded.getSequence(0);
             int totalMaxLength = Math.min(2048, inputIds.length + Math.max(8, maxNewTokens));
 
             try (GeneratorParams params = new GeneratorParams(model)) {
                 params.setSearchOption("max_length", (double) totalMaxLength);
-                params.setSearchOption("do_sample", !hasWeb);
-                if (!hasWeb) {
+                params.setSearchOption("do_sample", !hasEvidence);
+                if (!hasEvidence) {
                     params.setSearchOption("temperature", 0.70);
                     params.setSearchOption("top_k", 20.0);
                     params.setSearchOption("top_p", 0.80);
@@ -132,7 +158,9 @@ public final class QwenEngine implements AutoCloseable {
                         raw.append(stream.decode(token));
 
                         String visible = cleanup(raw.toString());
-                        if (listener != null && !visible.isEmpty()) listener.onUpdate(visible);
+                        if (listener != null && !visible.isEmpty()) {
+                            listener.onUpdate(visible);
+                        }
 
                         if (containsStopMarker(raw)) break;
                     }
@@ -140,16 +168,7 @@ public final class QwenEngine implements AutoCloseable {
             }
         }
 
-        String answer = cleanup(raw.toString());
-        if (!answer.isEmpty()) {
-            synchronized (conversation) {
-                conversation.add(new ChatTurn("user", q));
-                conversation.add(new ChatTurn("assistant", answer));
-                trimConversationInMemory();
-                saveConversationLocked();
-            }
-        }
-        return answer;
+        return cleanup(raw.toString());
     }
 
     public void cancelGeneration() {
@@ -158,16 +177,45 @@ public final class QwenEngine implements AutoCloseable {
 
     public void newConversation() throws Exception {
         cancelRequested = true;
-        synchronized (conversation) {
-            conversation.clear();
-            saveConversationLocked();
-        }
+        conversation.clear();
+        saveConversationLocked();
     }
 
     public List<ChatTurn> getConversationSnapshot() {
-        synchronized (conversation) {
-            return Collections.unmodifiableList(new ArrayList<>(conversation));
+        ArrayList<ChatTurn> out = new ArrayList<>();
+        for (ConversationHistory.Turn turn : conversation.snapshot()) {
+            out.add(new ChatTurn(turn.turnId, turn.role, turn.content));
         }
+        return Collections.unmodifiableList(out);
+    }
+
+    public void commitCanonicalTurn(String turnId, String question, String answer)
+            throws Exception {
+        String q = question == null ? "" : question.trim();
+        String a = answer == null ? "" : answer.trim();
+        if (q.isEmpty() || a.isEmpty()) return;
+
+        String id = turnId == null ? "" : turnId.trim();
+        if (id.isEmpty()) id = java.util.UUID.randomUUID().toString();
+
+        conversation.appendTurn(id, q, a);
+        saveConversationLocked();
+    }
+
+    public boolean replaceCanonicalAnswer(String turnId, String answer) throws Exception {
+        boolean replaced = conversation.replaceAnswer(turnId, answer);
+        if (replaced) saveConversationLocked();
+        return replaced;
+    }
+
+    public String getCanonicalAnswer(String turnId) {
+        return conversation.answerForTurn(turnId);
+    }
+
+    public boolean removeCanonicalTurn(String turnId) throws Exception {
+        boolean removed = conversation.removeTurn(turnId);
+        if (removed) saveConversationLocked();
+        return removed;
     }
 
     public String rememberCorrect(String question, String answer) throws Exception {
@@ -185,24 +233,15 @@ public final class QwenEngine implements AutoCloseable {
         return memory.count();
     }
 
-    private void replaceConversationAnswer(String question, String wrongAnswer, String correction) throws Exception {
+    private void replaceConversationAnswer(
+            String question, String wrongAnswer, String correction) throws Exception {
         String q = question == null ? "" : question.trim();
         String old = wrongAnswer == null ? "" : wrongAnswer.trim();
         String corrected = correction == null ? "" : correction.trim();
         if (q.isEmpty() || corrected.isEmpty()) return;
 
-        synchronized (conversation) {
-            for (int i = conversation.size() - 1; i >= 1; i--) {
-                ChatTurn assistant = conversation.get(i);
-                ChatTurn user = conversation.get(i - 1);
-                if (!"assistant".equals(assistant.role) || !"user".equals(user.role)) continue;
-                if (!user.content.trim().equals(q)) continue;
-                if (!old.isEmpty() && !assistant.content.trim().equals(old)) continue;
-
-                conversation.set(i, new ChatTurn("assistant", corrected));
-                saveConversationLocked();
-                return;
-            }
+        if (conversation.replaceLatestAnswer(q, old, corrected)) {
+            saveConversationLocked();
         }
     }
 
@@ -392,59 +431,12 @@ public final class QwenEngine implements AutoCloseable {
         return out.toString().trim();
     }
 
-    private void trimConversationInMemory() {
-        while (conversation.size() > MAX_HISTORY_MESSAGES) {
-            if (conversation.size() >= 2) {
-                conversation.remove(0);
-                conversation.remove(0);
-            } else {
-                conversation.remove(0);
-            }
-        }
-    }
-
     private void loadConversation() {
-        if (!chatFile.exists()) return;
-        synchronized (conversation) {
-            conversation.clear();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                    new FileInputStream(chatFile), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    line = line.trim();
-                    if (line.isEmpty()) continue;
-                    JSONObject obj = new JSONObject(line);
-                    String role = obj.optString("role", "");
-                    String content = obj.optString("content", "");
-                    if (("user".equals(role) || "assistant".equals(role)) && !content.isEmpty()) {
-                        conversation.add(new ChatTurn(role, content));
-                    }
-                }
-                trimConversationInMemory();
-            } catch (Exception ignored) {
-                conversation.clear();
-            }
-        }
+        conversation.replaceAll(chatStore.load());
     }
 
     private void saveConversationLocked() throws Exception {
-        File tmp = new File(chatFile.getParentFile(), chatFile.getName() + ".tmp");
-        try (FileOutputStream out = new FileOutputStream(tmp, false)) {
-            for (ChatTurn turn : conversation) {
-                JSONObject obj = new JSONObject();
-                obj.put("role", turn.role);
-                obj.put("content", turn.content);
-                out.write((obj.toString() + "\n").getBytes(StandardCharsets.UTF_8));
-            }
-            out.getFD().sync();
-        }
-
-        if (chatFile.exists() && !chatFile.delete()) {
-            throw new IllegalStateException("تعذر تحديث سجل المحادثة");
-        }
-        if (!tmp.renameTo(chatFile)) {
-            throw new IllegalStateException("تعذر حفظ سجل المحادثة");
-        }
+        chatStore.save(conversation.snapshot());
     }
 
     private static boolean containsStopMarker(StringBuilder raw) {

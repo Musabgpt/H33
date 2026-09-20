@@ -55,14 +55,17 @@ public final class TextFileTool {
     }
 
     public static String save(Context context, String fileName, String content) throws Exception {
-        String safe = sanitize(fileName);
+        String safe = normalizeFileName(fileName);
         byte[] bytes = (content == null ? "" : content).getBytes(StandardCharsets.UTF_8);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContentResolver resolver = context.getContentResolver();
             ContentValues values = new ContentValues();
             values.put(MediaStore.Downloads.DISPLAY_NAME, safe);
-            values.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
+            values.put(MediaStore.Downloads.MIME_TYPE,
+                    safe.toLowerCase(Locale.ROOT).endsWith(".jsonl")
+                            ? "application/x-ndjson"
+                            : "text/plain");
             values.put(MediaStore.Downloads.RELATIVE_PATH,
                     Environment.DIRECTORY_DOWNLOADS + "/H33");
             values.put(MediaStore.Downloads.IS_PENDING, 1);
@@ -105,22 +108,28 @@ public final class TextFileTool {
         return file.getAbsolutePath();
     }
 
-    private static String sanitize(String fileName) {
+    static String normalizeFileName(String fileName) {
         String name = fileName == null ? "H33.txt" : fileName.trim();
         if (name.isEmpty()) name = "H33.txt";
 
         name = sanitizeBase(name);
 
-        if (!name.toLowerCase(Locale.ROOT).endsWith(".txt")) {
-            name += ".txt";
+        String lower = name.toLowerCase(Locale.ROOT);
+        String extension;
+        if (lower.endsWith(".jsonl")) {
+            extension = ".jsonl";
+        } else if (lower.endsWith(".txt")) {
+            extension = ".txt";
+        } else {
+            extension = ".txt";
+            name += extension;
         }
 
         if (name.length() > 64) {
-            String base = name.substring(0, Math.min(58, name.length()));
-            if (base.toLowerCase(Locale.ROOT).endsWith(".txt")) {
-                return base;
-            }
-            name = base + ".txt";
+            String base = name.substring(0, name.length() - extension.length());
+            int maxBase = Math.max(1, 64 - extension.length());
+            if (base.length() > maxBase) base = base.substring(0, maxBase);
+            name = base + extension;
         }
 
         return name;

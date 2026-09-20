@@ -15,6 +15,7 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -35,12 +36,21 @@ public final class WebSearchClient {
         public final String sources;
         public final int sourceCount;
         public final boolean directUrl;
+        public final List<SearchResult> results;
 
         WebPayload(String context, String sources, int sourceCount, boolean directUrl) {
+            this(context, sources, sourceCount, directUrl, Collections.emptyList());
+        }
+
+        WebPayload(String context, String sources, int sourceCount, boolean directUrl,
+                   List<SearchResult> results) {
             this.context = context == null ? "" : context;
             this.sources = sources == null ? "" : sources;
             this.sourceCount = sourceCount;
             this.directUrl = directUrl;
+            this.results = Collections.unmodifiableList(
+                    new ArrayList<>(results == null ? Collections.emptyList() : results)
+            );
         }
 
         public boolean isUsable() {
@@ -103,28 +113,50 @@ public final class WebSearchClient {
         String q = query == null ? "" : query.trim();
         if (q.isEmpty()) return new WebPayload("", "", 0, false);
 
-        List<Result> results = new ArrayList<>();
+        int rawLimit = Math.max(maxResults, Math.min(30, maxResults * 3));
+        List<SearchResult> results = new ArrayList<>();
 
         try {
-            results = searchBingRss(q, maxResults);
+            results = searchDuckDuckGoHtml(q, rawLimit);
         } catch (Exception ignored) {
         }
 
-        if (results.isEmpty()) {
+        SearchQualityGate.Result quality =
+                SearchQualityGate.filter(q, results, maxResults);
+
+        if (quality.accepted.isEmpty()) {
             try {
-                results = searchDuckDuckGo(q, maxResults);
+                results = searchBingRss(q, rawLimit);
             } catch (Exception ignored) {
+                results = new ArrayList<>();
             }
+            quality = SearchQualityGate.filter(q, results, maxResults);
         }
 
-        if (results.isEmpty()) {
+        if (quality.accepted.isEmpty()) {
+            try {
+                results = searchDuckDuckGoInstant(q, rawLimit);
+            } catch (Exception ignored) {
+                results = new ArrayList<>();
+            }
+            quality = SearchQualityGate.filter(q, results, maxResults);
+        }
+
+        if (quality.accepted.isEmpty()) {
             return new WebPayload("", "", 0, false);
         }
 
-        return payloadFromResults(results, false);
+        return payloadFromAccepted(quality.accepted, false);
     }
 
     private static WebPayload fetchDirectUrl(String urlText) throws Exception {
+        SearchResult directCandidate = new SearchResult(urlText, urlText, urlText);
+        SearchQualityGate.Result directQuality = SearchQualityGate.filter(
+                urlText, java.util.Collections.singletonList(directCandidate), 1);
+        if (directQuality.accepted.isEmpty()) {
+            return new WebPayload("", "", 0, true);
+        }
+
         URL url = new URL(urlText);
         HttpURLConnection conn = open(url, "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5");
 
@@ -154,13 +186,41 @@ public final class WebSearchClient {
             String context = "[1] " + title + "\nURL: " + urlText + "\n" + text;
             String sources = "[1] " + title + "\n" + urlText;
 
-            return new WebPayload(context.trim(), sources.trim(), 1, true);
+            SearchResult directResult =
+                    new SearchResult(title, urlText, text);
+            return new WebPayload(
+                    context.trim(),
+                    sources.trim(),
+                    1,
+                    true,
+                    Collections.singletonList(directResult)
+            );
         } finally {
             conn.disconnect();
         }
     }
 
-    private static List<Result> searchBingRss(String query, int maxResults) throws Exception {
+    private static List<SearchResult> searchDuckDuckGoHtml(
+            String query, int maxResults) throws Exception {
+        String encoded = URLEncoder.encode(
+                query, StandardCharsets.UTF_8.name());
+        URL url = new URL(
+                "https://html.duckduckgo.com/html/?q=" + encoded);
+        HttpURLConnection conn = open(
+                url,
+                "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5"
+        );
+
+        try {
+            String html = readLimited(conn.getInputStream(), 500_000);
+            if (html.trim().isEmpty()) return new ArrayList<>();
+            return DuckDuckGoHtmlParser.parse(html, maxResults);
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private static List<SearchResult> searchBingRss(String query, int maxResults) throws Exception {
         String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
         URL url = new URL("https://www.bing.com/search?q=" + encoded + "&format=rss&setlang=ar");
         HttpURLConnection conn = open(url, "application/rss+xml,application/xml,text/xml,*/*;q=0.5");
@@ -169,7 +229,7 @@ public final class WebSearchClient {
             XmlPullParser parser = Xml.newPullParser();
             parser.setInput(in, "UTF-8");
 
-            List<Result> results = new ArrayList<>();
+            List<SearchResult> results = new ArrayList<>();
             String currentTag = null;
             String title = "", link = "", description = "";
             boolean inItem = false;
@@ -191,7 +251,7 @@ public final class WebSearchClient {
                     String name = parser.getName();
                     if ("item".equalsIgnoreCase(name) && inItem) {
                         if (!title.trim().isEmpty() || !description.trim().isEmpty()) {
-                            results.add(new Result(
+                            results.add(new SearchResult(
                                     clean(title),
                                     cleanUrl(link),
                                     truncate(clean(description), 420)
@@ -209,7 +269,7 @@ public final class WebSearchClient {
         }
     }
 
-    private static List<Result> searchDuckDuckGo(String query, int maxResults) throws Exception {
+    private static List<SearchResult> searchDuckDuckGoInstant(String query, int maxResults) throws Exception {
         String encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name());
         URL url = new URL("https://api.duckduckgo.com/?q=" + encoded +
                 "&format=json&no_html=1&no_redirect=1&skip_disambig=1");
@@ -218,14 +278,14 @@ public final class WebSearchClient {
         try {
             String json = readLimited(conn.getInputStream(), 180_000);
             JSONObject root = new JSONObject(json);
-            List<Result> results = new ArrayList<>();
+            List<SearchResult> results = new ArrayList<>();
 
             String abstractText = root.optString("AbstractText", "").trim();
             String abstractUrl = root.optString("AbstractURL", "").trim();
             String heading = root.optString("Heading", "").trim();
 
             if (!abstractText.isEmpty()) {
-                results.add(new Result(
+                results.add(new SearchResult(
                         heading.isEmpty() ? "نتيجة مباشرة" : heading,
                         abstractUrl,
                         truncate(abstractText, 500)
@@ -240,7 +300,7 @@ public final class WebSearchClient {
         }
     }
 
-    private static void collectTopics(JSONArray topics, List<Result> out, int max) {
+    private static void collectTopics(JSONArray topics, List<SearchResult> out, int max) {
         for (int i = 0; i < topics.length() && out.size() < max; i++) {
             JSONObject item = topics.optJSONObject(i);
             if (item == null) continue;
@@ -254,17 +314,17 @@ public final class WebSearchClient {
             String text = item.optString("Text", "").trim();
             String url = item.optString("FirstURL", "").trim();
             if (!text.isEmpty()) {
-                out.add(new Result("نتيجة ويب", url, truncate(text, 420)));
+                out.add(new SearchResult("نتيجة ويب", url, truncate(text, 420)));
             }
         }
     }
 
-    private static WebPayload payloadFromResults(List<Result> results, boolean direct) {
+    static WebPayload payloadFromAccepted(List<SearchResult> results, boolean direct) {
         StringBuilder context = new StringBuilder();
         StringBuilder sources = new StringBuilder();
         int index = 1;
 
-        for (Result r : results) {
+        for (SearchResult r : results) {
             if (r.title.isEmpty() && r.snippet.isEmpty()) continue;
 
             context.append("[").append(index).append("] ")
@@ -286,7 +346,8 @@ public final class WebSearchClient {
                 context.toString().trim(),
                 sources.toString().trim(),
                 count,
-                direct
+                direct,
+                results
         );
     }
 
@@ -401,15 +462,4 @@ public final class WebSearchClient {
         return s.substring(0, max) + "…";
     }
 
-    private static final class Result {
-        final String title;
-        final String url;
-        final String snippet;
-
-        Result(String title, String url, String snippet) {
-            this.title = title == null ? "" : title;
-            this.url = url == null ? "" : url;
-            this.snippet = snippet == null ? "" : snippet;
-        }
-    }
 }

@@ -1,0 +1,96 @@
+name: Diagnose H33 Web Search
+
+on:
+  push:
+    branches: [h33-three-candidate-native]
+    paths:
+      - ".github/workflows/diagnose-web-search.yml"
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect Bing RSS for the exact Arabic query
+        run: |
+          python - <<'PY'
+          import urllib.parse, urllib.request, xml.etree.ElementTree as ET
+
+          queries = [
+              ("AR", "من هو رئيس سوريا الحالي؟", "ar"),
+              ("EN", "current president of Syria", "en"),
+          ]
+
+          for label, query, lang in queries:
+              print(f"=== {label} QUERY ===")
+
+              bing_url = (
+                  "https://www.bing.com/search?q="
+                  + urllib.parse.quote_plus(query)
+                  + "&format=rss&setlang="
+                  + lang
+              )
+              req = urllib.request.Request(
+                  bing_url,
+                  headers={
+                      "User-Agent": "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36",
+                      "Accept-Language": "ar,en;q=0.8",
+                  },
+              )
+              print("--- BING RSS ---")
+              print(bing_url)
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      data = r.read()
+                  root = ET.fromstring(data)
+                  items = root.findall(".//item")
+                  print("COUNT", len(items))
+                  for i, item in enumerate(items[:5], 1):
+                      print(f"[{i}] {(item.findtext('title') or '').strip()}")
+              except Exception as exc:
+                  print("ERROR", type(exc).__name__, str(exc))
+
+              ddg_url = (
+                  "https://html.duckduckgo.com/html/?q="
+                  + urllib.parse.quote_plus(query)
+              )
+              print("--- DUCKDUCKGO HTML ---")
+              print(ddg_url)
+              req = urllib.request.Request(
+                  ddg_url,
+                  headers={
+                      "User-Agent": "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36",
+                      "Accept-Language": "ar,en;q=0.8",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      html = r.read().decode("utf-8", "ignore")
+                  import re, html as htmlmod
+                  blocks = re.findall(
+                      r'(?is)<div[^>]+class="[^"]*result[^"]*"[^>]*>(.*?)</div>\\s*</div>',
+                      html,
+                  )
+                  print("RAW_BLOCKS", len(blocks))
+                  titles = re.findall(
+                      r'(?is)<a[^>]+class="result__a"[^>]*>(.*?)</a>',
+                      html,
+                  )
+                  snippets = re.findall(
+                      r'(?is)<a[^>]+class="result__snippet"[^>]*>(.*?)</a>|<div[^>]+class="result__snippet"[^>]*>(.*?)</div>',
+                      html,
+                  )
+                  hrefs = re.findall(
+                      r'(?is)<a[^>]+class="result__a"[^>]+href="([^"]+)"',
+                      html,
+                  )
+                  print("COUNT", len(titles))
+                  for i, title in enumerate(titles[:10], 1):
+                      clean_title = re.sub(r'<[^>]+>', ' ', htmlmod.unescape(title))
+                      clean_title = re.sub(r'\\s+', ' ', clean_title).strip()
+                      href = htmlmod.unescape(hrefs[i-1]) if i-1 < len(hrefs) else ""
+                      print(f"[{i}] TITLE: {clean_title}")
+                      print(f"    URL: {href}")
+              except Exception as exc:
+                  print("ERROR", type(exc).__name__, str(exc))
+          PY
