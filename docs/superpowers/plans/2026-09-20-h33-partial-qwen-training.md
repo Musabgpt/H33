@@ -120,7 +120,7 @@ Preference output for each available rejected answer:
 
 - [ ] **Step 3: Deterministic split**
 
-Use seed `3407`. Sort by `id`, shuffle with `random.Random(3407)`, reserve 10% (minimum 10 when dataset size permits) for evaluation.
+Use seed `3407`. Sort by `id`, shuffle with `random.Random(3407)`. If there are 20 or more effective turns, set `eval_count = max(2, round(n * 0.10))`; if there are 2–19 turns, set `eval_count = 1`; if there is only 1 turn, stop with `not enough data for train/eval split` instead of training.
 
 - [ ] **Step 4: Run tests**
 
