@@ -124,6 +124,18 @@ def optimizer_limit_reached(
     )
 
 
+def model_dtype_kwargs(transformers_version: str, dtype) -> dict:
+    match = __import__("re").match(r"^\s*(\d+)", str(transformers_version or ""))
+    if not match:
+        raise ValueError(
+            f"cannot parse Transformers version: {transformers_version!r}"
+        )
+    major = int(match.group(1))
+    if major >= 5:
+        return {"dtype": dtype}
+    return {"torch_dtype": dtype}
+
+
 def _atomic_write_json(path: Path, value: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -546,6 +558,7 @@ def _collate_one(example: dict, pad_token_id: int, torch) -> dict:
 def run_training(args) -> int:
     try:
         import torch
+        import transformers
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except ImportError as exc:
         raise SystemExit(
@@ -602,7 +615,7 @@ def run_training(args) -> int:
 
     model = AutoModelForCausalLM.from_pretrained(
         model_source,
-        torch_dtype=dtype,
+        **model_dtype_kwargs(transformers.__version__, dtype),
     )
     model.config.use_cache = False
 
