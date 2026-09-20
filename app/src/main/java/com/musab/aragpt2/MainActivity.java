@@ -7,6 +7,7 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.text.method.LinkMovementMethod;
@@ -23,6 +24,11 @@ import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.webkit.CookieManager;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
@@ -382,6 +388,24 @@ public class MainActivity extends AppCompatActivity {
                     false);
             unavailable.setAlpha(0.75f);
             card.addView(unavailable);
+
+            if (candidate.kind == AnswerCandidate.Kind.HOSTED
+                    && "google-ai-overview".equals(candidate.provider)
+                    && (GoogleAiOverviewProvider.CONSENT_REQUIRED_STATUS
+                            .equals(candidate.status)
+                        || GoogleAiOverviewProvider.CHALLENGE_STATUS
+                            .equals(candidate.status))) {
+                String actionText =
+                        GoogleAiOverviewProvider.CONSENT_REQUIRED_STATUS
+                                .equals(candidate.status)
+                                ? "فتح Google للموافقة"
+                                : "فتح Google للتحقق";
+                Button googleSetup = smallButton(actionText);
+                googleSetup.setOnClickListener(v ->
+                        showGoogleInteractionDialog(set.question));
+                card.addView(googleSetup);
+            }
+
             parent.addView(card);
             return;
         }
@@ -728,6 +752,88 @@ public class MainActivity extends AppCompatActivity {
         row.addView(copy);
         row.addView(txt);
         block.addView(row);
+    }
+
+    private void showGoogleInteractionDialog(String question) {
+        final WebView webView = new WebView(this);
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        settings.setSupportMultipleWindows(false);
+        settings.setUserAgentString(
+                GoogleAiOverviewProvider.chromeLikeUserAgent(
+                        WebSettings.getDefaultUserAgent(this)));
+
+        CookieManager cookieManager = CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        cookieManager.setAcceptThirdPartyCookies(webView, false);
+
+        TextView help = new TextView(this);
+        help.setText("هذه صفحة Google داخل H33. وافق أو أكمل التحقق يدويًا، "
+                + "ثم أغلق النافذة وأعد السؤال.");
+        help.setPadding(dp(12), dp(10), dp(12), dp(10));
+        help.setTextSize(13f);
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.addView(help, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        container.addView(webView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(520)));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("إعداد Google داخل H33")
+                .setView(container)
+                .setNegativeButton("إغلاق", null)
+                .create();
+
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(
+                    WebView view, WebResourceRequest request) {
+                Uri target = request == null ? null : request.getUrl();
+                String host = target == null ? "" : target.getHost();
+                return !GoogleAiOverviewProvider.isAllowedGoogleHost(host);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (GoogleAiOverviewProvider.isConsentPage(url)) {
+                    help.setText("Google يطلب موافقتك. أكملها يدويًا هنا.");
+                } else if (GoogleAiOverviewProvider.isChallengePage(url)) {
+                    help.setText("Google يطلب تحققًا بشريًا. أكمله يدويًا هنا.");
+                } else {
+                    help.setText("صفحة Google جاهزة. أغلق النافذة وأعد السؤال "
+                            + "ليحاول H33 استخراج AI Overview.");
+                }
+            }
+        });
+
+        dialog.setOnDismissListener(ignored -> {
+            try {
+                CookieManager.getInstance().flush();
+                webView.stopLoading();
+                webView.setWebViewClient(null);
+                webView.loadUrl("about:blank");
+                webView.removeAllViews();
+                webView.destroy();
+            } catch (Exception ignoredCleanup) {
+            }
+        });
+
+        dialog.setOnShowListener(ignored -> {
+            String url = GoogleAiOverviewProvider.buildSearchUrl(
+                    question, "ar", "GB");
+            webView.loadUrl(url);
+        });
+
+        dialog.show();
     }
 
     private void exportPreferenceDatasets() {
