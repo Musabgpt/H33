@@ -43,4 +43,31 @@ public class ConversationHistoryTest {
         assertTrue(h.replaceLatestAnswer("سؤال قديم", "جواب قديم", "جواب مصحح"));
         assertEquals("جواب مصحح", h.snapshot().get(1).content);
     }
+    @Test
+    public void removeTurnDeletesExactlyOneUserAssistantPair() {
+        ConversationHistory h = new ConversationHistory(16);
+        h.appendTurn("t1", "سؤال 1", "جواب 1");
+        h.appendTurn("t2", "سؤال 2", "جواب 2");
+
+        assertTrue(h.removeTurn("t1"));
+
+        List<ConversationHistory.Turn> turns = h.snapshot();
+        assertEquals(2, turns.size());
+        assertEquals("t2", turns.get(0).turnId);
+        assertEquals("user", turns.get(0).role);
+        assertEquals("t2", turns.get(1).turnId);
+        assertEquals("assistant", turns.get(1).role);
+    }
+
+    @Test
+    public void answerForTurnReturnsCurrentCanonicalAnswer() {
+        ConversationHistory h = new ConversationHistory(16);
+        h.appendTurn("t1", "سؤال", "جواب أول");
+        assertEquals("جواب أول", h.answerForTurn("t1"));
+
+        assertTrue(h.replaceAnswer("t1", "جواب ثان"));
+        assertEquals("جواب ثان", h.answerForTurn("t1"));
+        assertEquals("", h.answerForTurn("missing"));
+    }
+
 }

@@ -50,6 +50,33 @@ public final class ConversationHistory {
         return false;
     }
 
+    public synchronized String answerForTurn(String turnId) {
+        String id = clean(turnId);
+        if (id.isEmpty()) return "";
+
+        for (int i = turns.size() - 1; i >= 0; i--) {
+            Turn t = turns.get(i);
+            if ("assistant".equals(t.role) && id.equals(t.turnId)) {
+                return t.content;
+            }
+        }
+        return "";
+    }
+
+    public synchronized boolean removeTurn(String turnId) {
+        String id = clean(turnId);
+        if (id.isEmpty()) return false;
+
+        boolean removed = false;
+        for (int i = turns.size() - 1; i >= 0; i--) {
+            if (id.equals(turns.get(i).turnId)) {
+                turns.remove(i);
+                removed = true;
+            }
+        }
+        return removed;
+    }
+
     public synchronized boolean replaceLatestAnswer(
             String question, String oldAnswer, String correctedAnswer) {
         String q = clean(question);

@@ -48,6 +48,9 @@ jobs:
       - name: Run deterministic Android JVM tests
         run: gradle :app:testDebugUnitTest --stacktrace
 
+      - name: Run Android lint
+        run: gradle :app:lintDebug --stacktrace
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

@@ -189,17 +189,30 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
     }
 
     private void configure(WebView webView) {
+        configureSearchWebView(webView, activity);
+    }
+
+    static void configureSearchWebView(WebView webView, android.content.Context context) {
+        if (webView == null || context == null) {
+            throw new IllegalArgumentException("webView/context required");
+        }
+
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setBlockNetworkImage(true);
+        settings.setLoadsImagesAutomatically(false);
+        settings.setGeolocationEnabled(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setSupportMultipleWindows(false);
+        settings.setSafeBrowsingEnabled(true);
         settings.setUserAgentString(
-                chromeLikeUserAgent(WebSettings.getDefaultUserAgent(activity)));
+                chromeLikeUserAgent(WebSettings.getDefaultUserAgent(context)));
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
@@ -315,10 +328,11 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
     static boolean isAllowedGoogleHost(String value) {
         String host = clean(value).toLowerCase(java.util.Locale.ROOT);
         if (host.startsWith("www.")) host = host.substring(4);
+
         return host.equals("google.com")
-                || host.endsWith(".google.com")
                 || host.equals("google.co.uk")
-                || host.endsWith(".google.co.uk");
+                || host.equals("consent.google.com")
+                || host.equals("consent.google.co.uk");
     }
 
     static boolean isConsentPage(String value) {
