@@ -3,6 +3,8 @@ package com.musab.aragpt2;
 import org.junit.Test;
 
 import java.util.Collections;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertFalse;
@@ -84,4 +86,34 @@ public class CandidateCoordinatorTest {
         assertTrue(set.web.available);
         assertFalse(set.hosted.available);
     }
+    @Test
+    public void webAndHostedCandidatesOverlapAfterLocalCompletes() throws Exception {
+        LocalAnswerProvider local = (q, listener) ->
+                ok("local", AnswerCandidate.Kind.LOCAL, "جواب محلي");
+
+        CountDownLatch webStarted = new CountDownLatch(1);
+        CountDownLatch hostedStarted = new CountDownLatch(1);
+
+        WebEvidenceAnswerProvider web = q -> {
+            webStarted.countDown();
+            assertTrue(hostedStarted.await(1, TimeUnit.SECONDS));
+            return ok("web", AnswerCandidate.Kind.WEB, "جواب بحث");
+        };
+
+        HostedAnswerProvider hosted = q -> {
+            hostedStarted.countDown();
+            assertTrue(webStarted.await(1, TimeUnit.SECONDS));
+            return ok("hosted", AnswerCandidate.Kind.HOSTED, "Google AI");
+        };
+
+        CandidateCoordinator coordinator = new CandidateCoordinator(
+                local, web, hosted, (turnId, question, answer) -> {}
+        );
+
+        CandidateSet set = coordinator.create("سؤال", null);
+
+        assertTrue(set.web.available);
+        assertTrue(set.hosted.available);
+    }
+
 }
