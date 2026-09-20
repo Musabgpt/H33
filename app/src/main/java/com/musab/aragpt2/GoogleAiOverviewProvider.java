@@ -25,6 +25,10 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
     private static final long OVERALL_TIMEOUT_MS = 10_000L;
     private static final long POLL_INTERVAL_MS = 650L;
+    static final String CONSENT_REQUIRED_STATUS =
+            "Google يحتاج موافقتك مرة واحدة داخل H33";
+    static final String CHALLENGE_STATUS =
+            "Google طلب تحقق بشري لهذا البحث";
 
     private final Activity activity;
     private final Handler mainHandler;
@@ -98,22 +102,30 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
                     @Override
                     public void onPageStarted(
                             WebView view, String pageUrl, Bitmap favicon) {
-                        if (isBlockedGooglePage(pageUrl)) {
+                        if (isConsentPage(pageUrl)) {
                             mainHandler.removeCallbacks(timeout);
                             complete(completed, latch, result, webViewRef,
-                                    unavailable(
-                                            "Google يطلب موافقة أو تحقق لهذا البحث"));
+                                    unavailable(CONSENT_REQUIRED_STATUS));
+                        } else if (isChallengePage(pageUrl)) {
+                            mainHandler.removeCallbacks(timeout);
+                            complete(completed, latch, result, webViewRef,
+                                    unavailable(CHALLENGE_STATUS));
                         }
                     }
 
                     @Override
                     public void onPageFinished(WebView view, String pageUrl) {
                         if (completed.get()) return;
-                        if (isBlockedGooglePage(pageUrl)) {
+                        if (isConsentPage(pageUrl)) {
                             mainHandler.removeCallbacks(timeout);
                             complete(completed, latch, result, webViewRef,
-                                    unavailable(
-                                            "Google يطلب موافقة أو تحقق لهذا البحث"));
+                                    unavailable(CONSENT_REQUIRED_STATUS));
+                            return;
+                        }
+                        if (isChallengePage(pageUrl)) {
+                            mainHandler.removeCallbacks(timeout);
+                            complete(completed, latch, result, webViewRef,
+                                    unavailable(CHALLENGE_STATUS));
                             return;
                         }
                         pollOverview(
@@ -309,10 +321,14 @@ public final class GoogleAiOverviewProvider implements HostedAnswerProvider {
                 || host.endsWith(".google.co.uk");
     }
 
-    private static boolean isBlockedGooglePage(String value) {
-        String url = clean(value).toLowerCase();
-        return url.contains("consent.google.")
-                || url.contains("/sorry/")
+    static boolean isConsentPage(String value) {
+        String url = clean(value).toLowerCase(java.util.Locale.ROOT);
+        return url.contains("consent.google.");
+    }
+
+    static boolean isChallengePage(String value) {
+        String url = clean(value).toLowerCase(java.util.Locale.ROOT);
+        return url.contains("/sorry/")
                 || url.contains("recaptcha")
                 || url.contains("captcha");
     }
