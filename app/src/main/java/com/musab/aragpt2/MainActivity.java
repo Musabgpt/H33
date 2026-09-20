@@ -337,7 +337,7 @@ public class MainActivity extends AppCompatActivity {
         block.removeAllViews();
 
         TextView heading = new TextView(this);
-        heading.setText("قارن الإجابات واختر الأفضل");
+        heading.setText("قارن الإجابات واختر الأنسب لك");
         heading.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
         heading.setTextSize(15f);
         heading.setPadding(dp(6), dp(2), dp(6), dp(8));
@@ -559,7 +559,7 @@ public class MainActivity extends AppCompatActivity {
         correction.setPadding(dp(16), dp(12), dp(16), dp(12));
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("تصحيحك هو المرجع")
+                .setTitle("اكتب تصحيحك")
                 .setView(correction)
                 .setNegativeButton("إلغاء", null)
                 .setPositiveButton("حفظ التصحيح", null)
@@ -659,7 +659,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void startNewChat() {
         generationId++;
-        if (engine != null) engine.cancelGeneration();
+        if (localInference != null) localInference.cancel();\n        else if (engine != null) engine.cancelGeneration();
 
         messagesContainer.removeAllViews();
         addWelcomeMessage();
