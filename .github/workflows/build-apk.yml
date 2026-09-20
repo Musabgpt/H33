@@ -3,7 +3,7 @@ name: Build H33 Qwen2.5 INT4 APK
 on:
   workflow_dispatch:
   push:
-    branches: [qwen2.5-mobile]
+    branches: [qwen2.5-mobile, 'h33-*']
   pull_request:
     branches: [qwen2.5-mobile]
 
