@@ -18,4 +18,4 @@ jobs:
         with:
           python-version: '3.11'
       - name: Run training data preparation tests
-        run: python -m unittest training.tests.test_prepare_preferences -v
+        run: python -m unittest discover -s training/tests -v
