@@ -26,4 +26,13 @@ public class GoogleAiOverviewUrlTest {
         assertTrue(url.contains("hl=ar"));
         assertTrue(url.contains("gl=GB"));
     }
+    @Test
+    public void googleHostCheckRejectsLookalikeDomains() {
+        assertTrue(GoogleAiOverviewProvider.isAllowedGoogleHost("google.com"));
+        assertTrue(GoogleAiOverviewProvider.isAllowedGoogleHost("www.google.com"));
+        assertTrue(GoogleAiOverviewProvider.isAllowedGoogleHost("google.co.uk"));
+        assertTrue(!GoogleAiOverviewProvider.isAllowedGoogleHost("evilgoogle.com"));
+        assertTrue(!GoogleAiOverviewProvider.isAllowedGoogleHost("google.com.evil.example"));
+    }
+
 }
