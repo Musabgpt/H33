@@ -29,6 +29,26 @@ def require_passing_evaluation(report: dict) -> dict:
     return report
 
 
+def require_original_weight_update(summary: dict) -> bool:
+    if not isinstance(summary, dict):
+        raise ValueError("training summary must be an object")
+
+    steps = int(summary.get("optimizer_steps", 0))
+    changed = bool(summary.get("original_weights_changed", False))
+    if steps <= 0 or not changed:
+        raise ValueError(
+            "no proof that selected original Qwen weights changed; refusing export"
+        )
+    return True
+
+
+def load_training_summary(path: Path) -> dict:
+    with Path(path).open("r", encoding="utf-8") as handle:
+        summary = json.load(handle)
+    require_original_weight_update(summary)
+    return summary
+
+
 def load_evaluation_report(path: Path) -> dict:
     with Path(path).open("r", encoding="utf-8") as handle:
         report = json.load(handle)
@@ -63,6 +83,12 @@ def run_export(args) -> int:
     report = load_evaluation_report(args.evaluation_report)
 
     trained_model = Path(args.trained_model)
+    training_summary_path = (
+        Path(args.training_summary)
+        if args.training_summary is not None
+        else trained_model.parent / "training_summary.json"
+    )
+    training_summary = load_training_summary(training_summary_path)
     if not trained_model.is_dir():
         raise FileNotFoundError(f"trained model directory missing: {trained_model}")
     if not (trained_model / "config.json").is_file():
@@ -106,6 +132,10 @@ def run_export(args) -> int:
         "trained_model": str(trained_model.resolve()),
         "output_dir": str(output_dir.resolve()),
         "evaluation_report": str(Path(args.evaluation_report).resolve()),
+        "training_summary": str(training_summary_path.resolve()),
+        "original_weights_changed": bool(
+            training_summary["original_weights_changed"]
+        ),
         "evaluation_general_ok": bool(report["general_ok"]),
         "evaluation_preference_ok": bool(report["preference_ok"]),
         "evaluation_passes_gate": bool(report["passes_gate"]),
@@ -124,6 +154,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--trained-model", type=Path, required=True)
     parser.add_argument("--evaluation-report", type=Path, required=True)
+    parser.add_argument("--training-summary", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
