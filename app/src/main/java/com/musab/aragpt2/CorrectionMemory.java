@@ -37,7 +37,7 @@ public final class CorrectionMemory {
     private final File file;
 
     public CorrectionMemory(Context context) {
-        file = new File(context.getFilesDir(), "qwen_learning_memory.jsonl");
+        file = new File(context.getFilesDir(), "legacy_learning_memory.jsonl");
     }
 
     public synchronized void remember(String question, String answer, boolean corrected) throws Exception {
