@@ -31,6 +31,9 @@ public class GoogleAiOverviewUrlTest {
         assertTrue(GoogleAiOverviewProvider.isAllowedGoogleHost("google.com"));
         assertTrue(GoogleAiOverviewProvider.isAllowedGoogleHost("www.google.com"));
         assertTrue(GoogleAiOverviewProvider.isAllowedGoogleHost("google.co.uk"));
+        assertTrue(GoogleAiOverviewProvider.isAllowedGoogleHost("consent.google.com"));
+        assertTrue(!GoogleAiOverviewProvider.isAllowedGoogleHost("accounts.google.com"));
+        assertTrue(!GoogleAiOverviewProvider.isAllowedGoogleHost("support.google.com"));
         assertTrue(!GoogleAiOverviewProvider.isAllowedGoogleHost("evilgoogle.com"));
         assertTrue(!GoogleAiOverviewProvider.isAllowedGoogleHost("google.com.evil.example"));
     }
