@@ -476,18 +476,11 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                if (preferenceStore == null) {
-                    throw new IllegalStateException("PreferenceStore غير جاهز");
-                }
-
-                preferenceStore.recordSelection(set, candidate.id);
-
-                boolean replaced =
-                        engine.replaceCanonicalAnswer(set.turnId, candidate.answer);
-                if (!replaced) {
-                    engine.commitCanonicalTurn(
-                            set.turnId, set.question, candidate.answer);
-                }
+                commitDecisionWithPreference(
+                        set,
+                        candidate.answer,
+                        () -> preferenceStore.recordSelection(set, candidate.id)
+                );
 
                 String savedPath =
                         saveRequestedTextSilently(set.question, candidate.answer);
@@ -549,19 +542,11 @@ public class MainActivity extends AppCompatActivity {
 
                     executor.execute(() -> {
                         try {
-                            if (preferenceStore == null) {
-                                throw new IllegalStateException(
-                                        "PreferenceStore غير جاهز");
-                            }
-
-                            preferenceStore.recordCorrection(set, better);
-
-                            boolean replaced =
-                                    engine.replaceCanonicalAnswer(set.turnId, better);
-                            if (!replaced) {
-                                engine.commitCanonicalTurn(
-                                        set.turnId, set.question, better);
-                            }
+                            commitDecisionWithPreference(
+                                    set,
+                                    better,
+                                    () -> preferenceStore.recordCorrection(set, better)
+                            );
 
                             try {
                                 engine.rememberCorrect(set.question, better);
@@ -603,6 +588,64 @@ public class MainActivity extends AppCompatActivity {
                 }));
 
         dialog.show();
+    }
+
+    @FunctionalInterface
+    private interface PreferenceWrite {
+        void write() throws Exception;
+    }
+
+    private void commitDecisionWithPreference(
+            CandidateSet set,
+            String answer,
+            PreferenceWrite preferenceWrite) throws Exception {
+
+        if (preferenceStore == null) {
+            throw new IllegalStateException("PreferenceStore غير جاهز");
+        }
+        if (engine == null) {
+            throw new IllegalStateException("QwenEngine غير جاهز");
+        }
+
+        String previous = engine.getCanonicalAnswer(set.turnId);
+        boolean hadPrevious = previous != null && !previous.trim().isEmpty();
+        boolean canonicalChanged = false;
+
+        try {
+            if (hadPrevious) {
+                boolean replaced =
+                        engine.replaceCanonicalAnswer(set.turnId, answer);
+                if (!replaced) {
+                    throw new IllegalStateException(
+                            "تعذر العثور على turn لاعتماد الجواب");
+                }
+            } else {
+                engine.commitCanonicalTurn(
+                        set.turnId, set.question, answer);
+            }
+            canonicalChanged = true;
+
+            preferenceWrite.write();
+        } catch (Exception ex) {
+            if (canonicalChanged) {
+                try {
+                    if (hadPrevious) {
+                        boolean restored =
+                                engine.replaceCanonicalAnswer(
+                                        set.turnId, previous);
+                        if (!restored) {
+                            throw new IllegalStateException(
+                                    "تعذر استعادة الجواب السابق");
+                        }
+                    } else {
+                        engine.removeCanonicalTurn(set.turnId);
+                    }
+                } catch (Exception rollbackError) {
+                    ex.addSuppressed(rollbackError);
+                }
+            }
+            throw ex;
+        }
     }
 
     private void setButtonsEnabled(List<Button> buttons, boolean enabled) {
