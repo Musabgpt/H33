@@ -73,4 +73,21 @@ public class SearchQualityGateTest {
         assertEquals(1, result.accepted.size());
         assertEquals("official.example", result.accepted.get(0).host);
     }
+    @Test
+    public void rejectsSingleTokenCoincidenceForMultiTermQuestion() {
+        List<SearchResult> raw = Arrays.asList(
+                new SearchResult(
+                        "دليل السياحة في سوريا",
+                        "https://travel.example/syria",
+                        "أفضل الأماكن السياحية والتاريخية في سوريا"
+                )
+        );
+
+        SearchQualityGate.Result result =
+                SearchQualityGate.filter("من هو رئيس سوريا الحالي؟", raw, 5);
+
+        assertTrue(result.accepted.isEmpty());
+        assertEquals(1, result.rejected.size());
+    }
+
 }
