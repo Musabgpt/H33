@@ -11,7 +11,7 @@ android {
         minSdk = 28
         targetSdk = 36
         versionCode = 4
-        versionName = "0.4.0-fable-tools"
+        versionName = "0.4.0-evidence-first"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -38,7 +38,8 @@ android {
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.0")\n    implementation("com.google.mlkit:translate:17.0.3")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.0")
+    implementation("com.google.mlkit:translate:17.0.3")
     implementation(files("libs/onnxruntime-genai.aar"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")
