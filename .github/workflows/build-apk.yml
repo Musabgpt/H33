@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [qwen2.5-mobile, 'h33-*']
-  pull_request:
-    branches: [qwen2.5-mobile]
-
 concurrency:
   group: h33-qwen-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
