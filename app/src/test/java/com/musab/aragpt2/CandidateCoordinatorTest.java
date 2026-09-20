@@ -5,7 +5,6 @@ import org.junit.Test;
 import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -28,10 +27,8 @@ public class CandidateCoordinatorTest {
         HostedAnswerProvider hosted = q ->
                 ok("hosted", AnswerCandidate.Kind.HOSTED, "جواب مستضاف");
 
-        AtomicInteger commits = new AtomicInteger();
         CandidateCoordinator coordinator = new CandidateCoordinator(
-                local, web, hosted,
-                (turnId, question, answer) -> commits.incrementAndGet()
+                local, web, hosted
         );
 
         CandidateSet set = coordinator.create("سؤال", null);
@@ -39,7 +36,6 @@ public class CandidateCoordinatorTest {
         assertFalse(set.local.available);
         assertTrue(set.hosted.available);
         assertTrue(set.hosted.answer.contains("مستضاف"));
-        assertTrue(commits.get() == 0);
     }
 
     @Test
@@ -53,17 +49,14 @@ public class CandidateCoordinatorTest {
                 AnswerCandidate.unavailable("hosted", AnswerCandidate.Kind.HOSTED,
                         "none", "hosted unavailable");
 
-        AtomicInteger commits = new AtomicInteger();
         CandidateCoordinator coordinator = new CandidateCoordinator(
-                local, web, hosted,
-                (turnId, question, answer) -> commits.incrementAndGet()
+                local, web, hosted
         );
 
         CandidateSet set = coordinator.create("سؤال", null);
 
         assertTrue(set.local.available);
         assertFalse(set.web.available);
-        assertTrue(commits.get() == 0);
     }
 
     @Test
@@ -77,7 +70,7 @@ public class CandidateCoordinatorTest {
         };
 
         CandidateCoordinator coordinator = new CandidateCoordinator(
-                local, web, hosted, (turnId, question, answer) -> {}
+                local, web, hosted
         );
 
         CandidateSet set = coordinator.create("سؤال", null);
