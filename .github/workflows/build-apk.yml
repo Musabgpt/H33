@@ -8,7 +8,7 @@ on:
     branches: [qwen2.5-mobile]
 
 concurrency:
-  group: h33-qwen-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: h33-qwen-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
