@@ -97,7 +97,7 @@ public final class CandidateCoordinator {
     private static AnswerCandidate unavailableLocal(String status) {
         return AnswerCandidate.unavailable(
                 "local", AnswerCandidate.Kind.LOCAL,
-                "qwen2.5-0.5b-int4", status);
+                "deepseek-coder-1.3b-int4", status);
     }
 
     private static String statusFrom(Throwable t, String fallback) {
