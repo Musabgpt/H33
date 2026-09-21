@@ -33,13 +33,6 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      # Cache is repository-scoped. This full build establishes the identity;
-      # subsequent small APKs restore it and Android accepts them as updates.
-      - name: Restore stable H33 signing identity
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: h33-android-debug-signing-v1
 
       - name: Install Android SDK components
         run: |
@@ -101,6 +94,19 @@ jobs:
         if: ${{ (github.event_name == 'push' && !contains(github.event.head_commit.message, '[full]')) || (github.event_name == 'workflow_dispatch' && !inputs.bundle_model) }}
         run: mkdir -p app/src/main/assets/model
 
+      - name: Create deterministic H33 update signing key
+        run: |
+          rm -f "$HOME/.android/debug.keystore"
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=H33 Update,O=Musabgpt,C=GB" \
+            -J-Duser.language=en -J-Duser.country=US
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey | tee h33-key.txt
+
       - name: Build APK
         run: gradle :app:assembleDebug --stacktrace
 
@@ -124,5 +130,6 @@ jobs:
             apk.sha256
             apk-files.txt
             apk-signing.txt
+            h33-key.txt
           compression-level: 0
           retention-days: 7
