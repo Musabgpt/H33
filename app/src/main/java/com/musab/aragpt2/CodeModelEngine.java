@@ -25,12 +25,12 @@ public final class CodeModelEngine implements AutoCloseable {
         }
     }
 
-    private static final String MODEL_ASSET = "model/deepseek-coder-1.3b-q4_k_m.gguf";
-    private static final String MODEL_FILE = "deepseek-coder-1.3b-q4_k_m.gguf";
+    private static final String MODEL_ASSET = "model/deepseek-coder-1.3b-q3_k_s.gguf";
+    private static final String MODEL_FILE = "deepseek-coder-1.3b-q3_k_s.gguf";
     private static final String CHAT_FILE = "current_chat.jsonl";
     private static final int MAX_HISTORY_MESSAGES = 2;
     private static final int MAX_PROMPT_CHARS = 2400;
-    private static final long MIN_MODEL_BYTES = 450L * 1024L * 1024L;
+    private static final long MIN_MODEL_BYTES = 350L * 1024L * 1024L;
     private static final Pattern TOOL_CALL = Pattern.compile(
             "<tool_call\\s+name=\\\"([a-zA-Z0-9_.-]{1,48})\\\">([\\s\\S]*?)</tool_call>");
     private static final String SYSTEM =
@@ -52,7 +52,7 @@ public final class CodeModelEngine implements AutoCloseable {
 
         File model = prepareModelFile();
         LlamaNative.load();
-        String error = LlamaNative.open(model.getAbsolutePath(), 384, 4);
+        String error = LlamaNative.open(model.getAbsolutePath(), 384, Math.max(2, Math.min(6, Runtime.getRuntime().availableProcessors())));
         if (error != null && !error.isEmpty()) throw new IllegalStateException(error);
     }
 
@@ -131,8 +131,8 @@ public final class CodeModelEngine implements AutoCloseable {
 
         AssetManager assets = context.getAssets();
         long free = new StatFs(context.getFilesDir().getAbsolutePath()).getAvailableBytes();
-        if (free < 950L * 1024L * 1024L) {
-            throw new IllegalStateException("تحتاج مساحة فارغة تقارب 1GB لتحضير النموذج");
+        if (free < 750L * 1024L * 1024L) {
+            throw new IllegalStateException("تحتاج مساحة فارغة تقارب 750MB لتحضير النموذج");
         }
         File temp = new File(context.getFilesDir(), MODEL_FILE + ".part");
         if (temp.exists() && !temp.delete()) throw new IllegalStateException("تعذر تنظيف ملف النموذج المؤقت");
