@@ -10,8 +10,8 @@ android {
         applicationId = "com.musab.aragpt2"
         minSdk = 28
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.8.0-deepseek-fast"
+        versionCode = 9
+        versionName = "0.8.1-deepseek-fast-debug"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -22,9 +22,6 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Keep the same install identity while compiling llama.cpp with
-            // Release optimizations. This APK can update the installed build.
-            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

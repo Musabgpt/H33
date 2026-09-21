@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.22.1)
 project(h33_llama LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
+# The installable artifact intentionally remains the same Debug variant as the
+# existing app, but the inference runtime itself must never use -O0.
+set(CMAKE_C_FLAGS_DEBUG "-O3 -DNDEBUG" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG "-O3 -DNDEBUG" CACHE STRING "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

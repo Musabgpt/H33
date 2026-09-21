@@ -58,7 +58,7 @@ jobs:
           git -C app/src/main/cpp/llama.cpp checkout ce8caa6e60a03093351d6016a818720e0d46f0fb
 
       - name: Compile optimized Android runtime before model conversion
-        run: gradle :app:externalNativeBuildRelease :app:compileReleaseJavaWithJavac --stacktrace
+        run: gradle :app:externalNativeBuildDebug :app:compileDebugJavaWithJavac --stacktrace
 
       - name: Set up Python
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
@@ -102,11 +102,11 @@ jobs:
         run: mkdir -p app/src/main/assets/model
 
       - name: Build APK
-        run: gradle :app:assembleRelease --stacktrace
+        run: gradle :app:assembleDebug --stacktrace
 
       - name: Audit APK
         run: |
-          APK=app/build/outputs/apk/release/app-release.apk
+          APK=app/build/outputs/apk/debug/app-debug.apk
           test -f "$APK"
           sha256sum "$APK" | tee apk.sha256
           unzip -l "$APK" | tee apk-files.txt
@@ -119,7 +119,7 @@ jobs:
         with:
           name: H33-DeepSeek-Coder-GGUF-${{ (github.event_name == 'push' || !inputs.bundle_model) && 'UPDATE' || 'FULL' }}
           path: |
-            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/debug/app-debug.apk
             apk.sha256
             apk-files.txt
           compression-level: 0
