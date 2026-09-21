@@ -106,7 +106,7 @@
             android:maxHeight="170dp"
             android:maxLines="6"
             android:hint="اكتب رسالة…"
-            android:hintTextColor="#9B9B9B"
+            android:textColorHint="#9B9B9B"
             android:textColor="#FFFFFF"
             android:textSize="17sp"
             android:gravity="start|center_vertical"
