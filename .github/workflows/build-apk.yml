@@ -61,20 +61,20 @@ jobs:
         run: gradle :app:externalNativeBuildDebug :app:compileDebugJavaWithJavac --stacktrace
 
       - name: Set up Python
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install GGUF conversion toolchain
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
         run: |
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1"
           pip install -r app/src/main/cpp/llama.cpp/requirements.txt
 
       - name: Convert official DeepSeek Coder to GGUF Q4_K_M
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
         run: |
           hf download deepseek-ai/deepseek-coder-1.3b-instruct \
             --local-dir /tmp/deepseek-hf
@@ -89,7 +89,7 @@ jobs:
             app/src/main/assets/model/deepseek-coder-1.3b-q4_k_m.gguf Q4_K_M
 
       - name: Validate full model
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
         run: |
           MODEL=app/src/main/assets/model/deepseek-coder-1.3b-q4_k_m.gguf
           test -s "$MODEL"
@@ -98,7 +98,7 @@ jobs:
           du -h "$MODEL"
 
       - name: Prepare model-free update
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.bundle_model) }}
+        if: ${{ (github.event_name == 'push' && !contains(github.event.head_commit.message, '[full]')) || (github.event_name == 'workflow_dispatch' && !inputs.bundle_model) }}
         run: mkdir -p app/src/main/assets/model
 
       - name: Build APK
@@ -112,15 +112,17 @@ jobs:
           unzip -l "$APK" | tee apk-files.txt
           unzip -l "$APK" | grep 'lib/arm64-v8a/.*h33_llama.*\.so'
           if unzip -l "$APK" | grep -q 'lib/armeabi-v7a/'; then exit 1; fi
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK" | tee apk-signing.txt
           echo "APK bytes: $(stat -c%s "$APK")"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: H33-DeepSeek-Coder-GGUF-${{ (github.event_name == 'push' || !inputs.bundle_model) && 'UPDATE' || 'FULL' }}
+          name: H33-DeepSeek-Coder-GGUF-${{ ((github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]')) && 'FULL' || 'UPDATE' }}
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             apk.sha256
             apk-files.txt
+            apk-signing.txt
           compression-level: 0
           retention-days: 7
