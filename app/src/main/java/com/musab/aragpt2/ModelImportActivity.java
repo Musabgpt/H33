@@ -43,10 +43,11 @@ public final class ModelImportActivity extends Activity {
         }
 
         Uri uri = data.getData();
-        TextView status = (TextView) findViewById(android.R.id.content).getRootView();
         try {
             File dir = new File(getFilesDir(), "models");
-            if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("Cannot create model directory");
+            if (!dir.exists() && !dir.mkdirs()) {
+                throw new IllegalStateException("Cannot create model directory");
+            }
             File temp = new File(dir, "deepseek-coder.tmp.gguf");
             File target = new File(dir, "deepseek-coder-1.3b-instruct.Q4_K_M.gguf");
 
