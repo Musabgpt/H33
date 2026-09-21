@@ -74,12 +74,21 @@ jobs:
           python app/src/main/cpp/llama.cpp/convert_hf_to_gguf.py /tmp/deepseek-hf \
             --outfile /tmp/deepseek-f16.gguf --outtype f16
           cmake -S app/src/main/cpp/llama.cpp -B /tmp/llama-host \
-            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_SERVER=OFF -DLLAMA_CURL=OFF
           cmake --build /tmp/llama-host --target llama-quantize --parallel 2
           mkdir -p app/src/main/assets/model
           /tmp/llama-host/bin/llama-quantize /tmp/deepseek-f16.gguf \
             app/src/main/assets/model/deepseek-coder-1.3b-q3_k_s.gguf Q3_K_S
+
+      - name: Smoke-test GGUF before packaging
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
+        run: |
+          cmake --build /tmp/llama-host --target llama-cli --parallel 2
+          MODEL=app/src/main/assets/model/deepseek-coder-1.3b-q3_k_s.gguf
+          timeout 45s /tmp/llama-host/bin/llama-cli -m "$MODEL" -p "Hi" -n 8 -c 256 -t 4 --no-display-prompt 2>&1 | tee smoke.txt
+          grep -Eiq '[[:alpha:]]{2,}' smoke.txt
+          echo "GGUF inference smoke test passed"
 
       - name: Validate full model
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
@@ -131,5 +140,6 @@ jobs:
             apk-files.txt
             apk-signing.txt
             h33-key.txt
+            smoke.txt
           compression-level: 0
           retention-days: 7
