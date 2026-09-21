@@ -48,6 +48,7 @@ public final class MainActivity extends Activity {
     private Button sendButton;
     private Button stopButton;
     private Button plusButton;
+    private Button modelButton;
     private TextView status;
     private NativeLlamaEngine engine;
     private boolean generating;
@@ -93,7 +94,7 @@ public final class MainActivity extends Activity {
         root.setBackgroundColor(BG);
         root.setPadding(dp(12), dp(8), dp(12), dp(7));
 
-        // Classic H33 header: large centered title with the purple New button over the left.
+        // Classic H33 header: the New button stays on the left and never covers the title.
         FrameLayout header = new FrameLayout(this);
         header.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(67)));
 
@@ -103,8 +104,8 @@ public final class MainActivity extends Activity {
         title.setTextSize(23f);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
-        FrameLayout.LayoutParams titleLp = new FrameLayout.LayoutParams(-1, -1);
-        header.addView(title, titleLp);
+        title.setPadding(dp(143), 0, 0, 0);
+        header.addView(title, new FrameLayout.LayoutParams(-1, -1));
 
         Button newChat = actionButton("＋ جديد", 143, 59);
         FrameLayout.LayoutParams newLp = new FrameLayout.LayoutParams(dp(143), dp(59), Gravity.START | Gravity.CENTER_VERTICAL);
@@ -120,6 +121,15 @@ public final class MainActivity extends Activity {
         status.setGravity(Gravity.CENTER);
         status.setPadding(0, 0, 0, dp(5));
         root.addView(status, new LinearLayout.LayoutParams(-1, dp(30)));
+
+        modelButton = actionButton("تحميل أوزان GGUF", 190, 48);
+        modelButton.setTextSize(15f);
+        modelButton.setVisibility(View.GONE);
+        modelButton.setOnClickListener(v -> startModelImport());
+        LinearLayout.LayoutParams modelLp = new LinearLayout.LayoutParams(dp(190), dp(48));
+        modelLp.gravity = Gravity.CENTER_HORIZONTAL;
+        modelLp.setMargins(0, 0, 0, dp(4));
+        root.addView(modelButton, modelLp);
 
         scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -179,7 +189,8 @@ public final class MainActivity extends Activity {
 
         plusButton = actionButton("+", 58, 58);
         plusButton.setTextSize(26f);
-        plusButton.setOnClickListener(v -> startActivityForResult(new Intent(this, ModelImportActivity.class), IMPORT_REQUEST));
+        plusButton.setContentDescription("تحميل أو تغيير نموذج GGUF");
+        plusButton.setOnClickListener(v -> startModelImport());
 
         composer.addView(sendButton);
         composer.addView(stopButton);
@@ -196,13 +207,21 @@ public final class MainActivity extends Activity {
         return new File(new File(getFilesDir(), "models"), MODEL_NAME);
     }
 
+    private void startModelImport() {
+        if (generating) return;
+        startActivityForResult(new Intent(this, ModelImportActivity.class), IMPORT_REQUEST);
+    }
+
     private void loadModelOrImport() {
         File model = modelFile();
         if (!model.isFile() || model.length() < 1024) {
-            status.setText("لا يوجد نموذج GGUF — اضغط + لاستيراده");
+            status.setText("لا يوجد نموذج GGUF — حمّل الأوزان من زر تحميل GGUF");
+            modelButton.setVisibility(View.VISIBLE);
             setComposerEnabled(false);
             return;
         }
+
+        modelButton.setVisibility(View.GONE);
         status.setText("جاري تحميل DeepSeek-Coder محليًا…");
         setComposerEnabled(false);
         executor.execute(() -> {
@@ -216,6 +235,8 @@ public final class MainActivity extends Activity {
             } catch (Exception e) {
                 main.post(() -> {
                     status.setText("فشل تحميل النموذج: " + safeMessage(e));
+                    modelButton.setText("إعادة تحميل أوزان GGUF");
+                    modelButton.setVisibility(View.VISIBLE);
                     setComposerEnabled(false);
                 });
             }
@@ -341,7 +362,8 @@ public final class MainActivity extends Activity {
         assistantTurns.clear();
         messages.removeAllViews();
         input.setText("");
-        status.setText(engine == null ? "جاري تجهيز DeepSeek-Coder…" : "جاهز • DeepSeek-Coder محلي فقط");
+        status.setText(engine == null ? "لا يوجد نموذج GGUF — حمّل الأوزان" : "جاهز • DeepSeek-Coder محلي فقط");
+        modelButton.setVisibility(engine == null ? View.VISIBLE : View.GONE);
         setComposerEnabled(engine != null);
         sendButton.setVisibility(View.VISIBLE);
         stopButton.setVisibility(View.GONE);
