@@ -1,0 +1,22 @@
+name: H33 native adapter regression tests
+on:
+  push:
+    branches: [h33-runtime-cancel]
+  pull_request:
+    paths:
+      - app/src/main/cpp/**
+      - tests/**
+      - scripts/model_smoke.py
+      - .github/workflows/runtime-tests.yml
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify native token lifetime and cancellation
+        run: |
+          bash tests/native/run.sh tokens
+          bash tests/native/run.sh cancel
+      - name: Reject false-positive model smoke results
+        run: python -m unittest discover -s tests -p 'test_*.py'
