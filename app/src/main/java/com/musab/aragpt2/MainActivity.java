@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -21,7 +22,6 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -30,7 +30,6 @@ import java.util.concurrent.Executors;
 /** H33 classic chat UI on top of the local-only native DeepSeek-Coder engine. */
 public final class MainActivity extends Activity {
     private static final int IMPORT_REQUEST = 7001;
-    private static final String MODEL_NAME = "deepseek-coder-1.3b-instruct.Q4_K_M.gguf";
     private static final int MAX_NEW_TOKENS = 384;
     private static final int PURPLE = Color.rgb(177, 112, 255);
     private static final int USER_PURPLE = Color.rgb(91, 55, 150);
@@ -203,18 +202,25 @@ public final class MainActivity extends Activity {
         setContentView(root);
     }
 
-    private File modelFile() {
-        return new File(new File(getFilesDir(), "models"), MODEL_NAME);
-    }
-
     private void startModelImport() {
         if (generating) return;
         startActivityForResult(new Intent(this, ModelImportActivity.class), IMPORT_REQUEST);
     }
 
+    private Uri savedModelUri() {
+        String value = getSharedPreferences(ModelImportActivity.PREFS, MODE_PRIVATE)
+                .getString(ModelImportActivity.KEY_URI, null);
+        if (value == null || value.trim().isEmpty()) return null;
+        try {
+            return Uri.parse(value);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private void loadModelOrImport() {
-        File model = modelFile();
-        if (!model.isFile() || model.length() < 1024) {
+        Uri uri = savedModelUri();
+        if (uri == null) {
             status.setText("لا يوجد نموذج GGUF — حمّل الأوزان من زر تحميل GGUF");
             modelButton.setVisibility(View.VISIBLE);
             setComposerEnabled(false);
@@ -226,7 +232,7 @@ public final class MainActivity extends Activity {
         setComposerEnabled(false);
         executor.execute(() -> {
             try {
-                NativeLlamaEngine local = new NativeLlamaEngine(model);
+                NativeLlamaEngine local = new NativeLlamaEngine(getContentResolver(), uri);
                 main.post(() -> {
                     engine = local;
                     status.setText("جاهز • DeepSeek-Coder محلي فقط");
@@ -234,7 +240,7 @@ public final class MainActivity extends Activity {
                 });
             } catch (Exception e) {
                 main.post(() -> {
-                    status.setText("فشل تحميل النموذج: " + safeMessage(e));
+                    status.setText("فشل فتح النموذج المحفوظ: " + safeMessage(e));
                     modelButton.setText("إعادة تحميل أوزان GGUF");
                     modelButton.setVisibility(View.VISIBLE);
                     setComposerEnabled(false);
@@ -393,7 +399,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == IMPORT_REQUEST) loadModelOrImport();
+        if (requestCode == IMPORT_REQUEST && resultCode == RESULT_OK) loadModelOrImport();
     }
 
     @Override protected void onDestroy() {
