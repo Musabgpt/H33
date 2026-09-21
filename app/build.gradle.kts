@@ -11,8 +11,8 @@ android {
         applicationId = "com.musab.aragpt2"
         minSdk = 28
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.7.0-local-only"
+        versionCode = 8
+        versionName = "0.8.0-external-gguf"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
             cmake {
