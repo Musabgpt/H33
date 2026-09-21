@@ -5,46 +5,51 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:layoutDirection="rtl"
+    android:background="#0F0F0F"
     android:paddingStart="12dp"
     android:paddingEnd="12dp"
-    android:paddingTop="10dp"
-    android:paddingBottom="8dp">
+    android:paddingTop="8dp"
+    android:paddingBottom="7dp">
 
-    <LinearLayout
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
+        android:layout_height="67dp">
 
         <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
+            android:id="@+id/title"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
             android:text="H33 DeepSeek Coder"
             android:textStyle="bold"
-            android:textSize="22sp"
-            android:textColor="#F4F7FF"
-            android:gravity="start" />
+            android:textSize="23sp"
+            android:textColor="#FFFFFF"
+            android:gravity="center" />
 
         <Button
             android:id="@+id/newChatButton"
-            android:layout_width="wrap_content"
-            android:layout_height="44dp"
+            android:layout_width="143dp"
+            android:layout_height="59dp"
+            android:layout_gravity="left|center_vertical"
             android:minWidth="0dp"
+            android:minHeight="0dp"
             android:text="＋ جديد"
-            android:textAllCaps="false" />
-    </LinearLayout>
+            android:textSize="15sp"
+            android:textColor="#FFFFFF"
+            android:textAllCaps="false"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp" />
+    </FrameLayout>
 
     <TextView
         android:id="@+id/status"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="جاري تحميل النموذج…"
-        android:textSize="12sp"
-        android:alpha="0.75"
-        android:gravity="start"
-        android:paddingTop="4dp"
-        android:paddingBottom="6dp" />
+        android:layout_height="30dp"
+        android:text="جاري تجهيز DeepSeek-Coder…"
+        android:textSize="13sp"
+        android:textColor="#BDBDBD"
+        android:alpha="0.86"
+        android:gravity="center"
+        android:paddingBottom="5dp" />
 
     <ScrollView
         android:id="@+id/chatScroll"
@@ -53,38 +58,42 @@
         android:layout_weight="1"
         android:fillViewport="true"
         android:clipToPadding="false"
-        android:paddingBottom="10dp">
+        android:paddingBottom="8dp">
 
         <LinearLayout
             android:id="@+id/messagesContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingTop="4dp"
+            android:paddingStart="2dp"
+            android:paddingEnd="2dp"
+            android:paddingTop="5dp"
             android:paddingBottom="12dp" />
     </ScrollView>
 
     <LinearLayout
         android:id="@+id/composerBar"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:minHeight="58dp"
+        android:layout_height="76dp"
+        android:minHeight="76dp"
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp"
-        android:layout_marginBottom="2dp">
+        android:paddingTop="7dp"
+        android:paddingBottom="7dp"
+        android:layout_marginTop="5dp"
+        android:layout_marginBottom="1dp">
 
         <Button
             android:id="@+id/plusButton"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="58dp"
+            android:layout_height="58dp"
             android:minWidth="0dp"
             android:minHeight="0dp"
             android:text="+"
-            android:textSize="25sp"
+            android:textSize="26sp"
+            android:textColor="#FFFFFF"
             android:textAllCaps="false"
             android:padding="0dp" />
 
@@ -93,38 +102,43 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:minHeight="46dp"
-            android:maxHeight="150dp"
+            android:minHeight="58dp"
+            android:maxHeight="170dp"
             android:maxLines="6"
             android:hint="اكتب رسالة…"
+            android:hintTextColor="#9B9B9B"
+            android:textColor="#FFFFFF"
+            android:textSize="17sp"
             android:gravity="start|center_vertical"
             android:inputType="textMultiLine|textCapSentences"
             android:imeOptions="actionSend"
             android:background="@android:color/transparent"
             android:paddingStart="10dp"
             android:paddingEnd="10dp"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp" />
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp" />
 
         <Button
             android:id="@+id/stopButton"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="58dp"
+            android:layout_height="58dp"
             android:minWidth="0dp"
             android:minHeight="0dp"
             android:text="■"
-            android:textSize="16sp"
+            android:textSize="15sp"
+            android:textColor="#FFFFFF"
             android:padding="0dp"
             android:visibility="gone" />
 
         <Button
             android:id="@+id/sendButton"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
+            android:layout_width="58dp"
+            android:layout_height="58dp"
             android:minWidth="0dp"
             android:minHeight="0dp"
             android:text="↑"
-            android:textSize="22sp"
+            android:textSize="24sp"
+            android:textColor="#FFFFFF"
             android:padding="0dp"
             android:enabled="false" />
     </LinearLayout>
