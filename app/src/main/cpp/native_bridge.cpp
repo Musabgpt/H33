@@ -3,8 +3,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 #include "llama.h"
@@ -17,6 +21,7 @@ namespace {
 
 struct Engine {
     llama_model * model = nullptr;
+    FILE * model_file = nullptr;
     int n_ctx = 3072;
     int n_threads = 4;
     std::atomic<bool> cancel{false};
@@ -51,6 +56,35 @@ std::string token_piece(const llama_vocab * vocab, llama_token token) {
     return out;
 }
 
+jlong create_engine_from_file(FILE * file, jint context_size, jint threads) {
+    if (file == nullptr) return 0;
+    init_backend();
+
+    auto * engine = new Engine();
+    engine->n_ctx = std::clamp(static_cast<int>(context_size), 1024, 4096);
+    engine->n_threads = std::clamp(static_cast<int>(threads), 2, 6);
+
+    llama_model_params params = llama_model_default_params();
+    params.n_gpu_layers = 0;
+
+    engine->model_file = file;
+    engine->model = llama_model_load_from_file_ptr(file, params);
+
+    if (engine->model == nullptr) {
+        LOGE("Failed to load GGUF model from file descriptor: errno=%d (%s)",
+             errno, std::strerror(errno));
+        std::fclose(file);
+        delete engine;
+        return 0;
+    }
+
+    LOGI("GGUF model loaded: %.3f GiB, %.3fB params",
+         static_cast<double>(llama_model_size(engine->model)) / (1024.0 * 1024.0 * 1024.0),
+         static_cast<double>(llama_model_n_params(engine->model)) / 1e9);
+
+    return reinterpret_cast<jlong>(engine);
+}
+
 } // namespace
 
 extern "C"
@@ -74,7 +108,7 @@ Java_com_musab_aragpt2_NativeLlamaEngine_nativeCreate(
     env->ReleaseStringUTFChars(jpath, path);
 
     if (engine->model == nullptr) {
-        LOGE("Failed to load GGUF model");
+        LOGE("Failed to load GGUF model from path");
         delete engine;
         return 0;
     }
@@ -84,6 +118,28 @@ Java_com_musab_aragpt2_NativeLlamaEngine_nativeCreate(
          static_cast<double>(llama_model_n_params(engine->model)) / 1e9);
 
     return reinterpret_cast<jlong>(engine);
+}
+
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_com_musab_aragpt2_NativeLlamaEngine_nativeCreateFromFd(
+        JNIEnv *, jobject, jint fd, jint context_size, jint threads) {
+    if (fd < 0) return 0;
+
+    int native_fd = ::dup(fd);
+    if (native_fd < 0) {
+        LOGE("dup(%d) failed: errno=%d (%s)", fd, errno, std::strerror(errno));
+        return 0;
+    }
+
+    FILE * file = ::fdopen(native_fd, "rb");
+    if (file == nullptr) {
+        LOGE("fdopen(%d) failed: errno=%d (%s)", native_fd, errno, std::strerror(errno));
+        ::close(native_fd);
+        return 0;
+    }
+
+    return create_engine_from_file(file, context_size, threads);
 }
 
 extern "C"
@@ -206,6 +262,10 @@ Java_com_musab_aragpt2_NativeLlamaEngine_nativeDestroy(
     if (engine->model != nullptr) {
         llama_model_free(engine->model);
         engine->model = nullptr;
+    }
+    if (engine->model_file != nullptr) {
+        std::fclose(engine->model_file);
+        engine->model_file = nullptr;
     }
     delete engine;
 }
