@@ -52,7 +52,7 @@ public final class CodeModelEngine implements AutoCloseable {
 
         File model = prepareModelFile();
         LlamaNative.load();
-        String error = LlamaNative.open(model.getAbsolutePath(), 512, 2);
+        String error = LlamaNative.open(model.getAbsolutePath(), 512, 4);
         if (error != null && !error.isEmpty()) throw new IllegalStateException(error);
     }
 
@@ -61,10 +61,18 @@ public final class CodeModelEngine implements AutoCloseable {
         ensureOpen();
         String q = safe(question).trim();
         if (q.isEmpty()) return "";
-        String answer = LlamaNative.generate(buildPrompt(q), Math.min(160, Math.max(16, maxNewTokens)));
+        StringBuilder streamed = new StringBuilder();
+        String answer = LlamaNative.generate(
+                buildPrompt(q),
+                Math.min(160, Math.max(16, maxNewTokens)),
+                token -> {
+                    streamed.append(token);
+                    String visible = cleanup(streamed.toString());
+                    if (listener != null && !visible.isEmpty()) listener.onUpdate(visible);
+                });
         if (answer == null) answer = "";
         answer = cleanup(answer);
-        if (listener != null && !answer.isEmpty()) listener.onUpdate(answer);
+        if (listener != null && streamed.length() == 0 && !answer.isEmpty()) listener.onUpdate(answer);
 
         Matcher call = TOOL_CALL.matcher(answer);
         if (!call.find()) return answer;
@@ -73,10 +81,16 @@ public final class CodeModelEngine implements AutoCloseable {
         String result;
         try { result = tool.execute(call.group(2).trim()); }
         catch (Exception e) { result = "Tool error: " + e.getMessage(); }
+        StringBuilder finalStream = new StringBuilder();
         String finalAnswer = cleanup(LlamaNative.generate(
                 buildPrompt(q + "\n\nTool " + call.group(1) + " returned:\n" + result
-                        + "\nGive the final answer without tool markup."), 160));
-        if (listener != null && !finalAnswer.isEmpty()) listener.onUpdate(finalAnswer);
+                        + "\nGive the final answer without tool markup."), 160,
+                token -> {
+                    finalStream.append(token);
+                    String visible = cleanup(finalStream.toString());
+                    if (listener != null && !visible.isEmpty()) listener.onUpdate(visible);
+                }));
+        if (listener != null && finalStream.length() == 0 && !finalAnswer.isEmpty()) listener.onUpdate(finalAnswer);
         return finalAnswer;
     }
 

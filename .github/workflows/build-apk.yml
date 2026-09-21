@@ -57,24 +57,24 @@ jobs:
           git clone https://github.com/ggml-org/llama.cpp.git app/src/main/cpp/llama.cpp
           git -C app/src/main/cpp/llama.cpp checkout ce8caa6e60a03093351d6016a818720e0d46f0fb
 
-      - name: Compile Android runtime before model conversion
-        run: gradle :app:externalNativeBuildDebug :app:compileDebugJavaWithJavac --stacktrace
+      - name: Compile optimized Android runtime before model conversion
+        run: gradle :app:externalNativeBuildRelease :app:compileReleaseJavaWithJavac --stacktrace
 
       - name: Set up Python
-        if: ${{ github.event_name == 'push' || inputs.bundle_model }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install GGUF conversion toolchain
-        if: ${{ github.event_name == 'push' || inputs.bundle_model }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
         run: |
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.1"
           pip install -r app/src/main/cpp/llama.cpp/requirements.txt
 
       - name: Convert official DeepSeek Coder to GGUF Q4_K_M
-        if: ${{ github.event_name == 'push' || inputs.bundle_model }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
         run: |
           hf download deepseek-ai/deepseek-coder-1.3b-instruct \
             --local-dir /tmp/deepseek-hf
@@ -89,7 +89,7 @@ jobs:
             app/src/main/assets/model/deepseek-coder-1.3b-q4_k_m.gguf Q4_K_M
 
       - name: Validate full model
-        if: ${{ github.event_name == 'push' || inputs.bundle_model }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_model }}
         run: |
           MODEL=app/src/main/assets/model/deepseek-coder-1.3b-q4_k_m.gguf
           test -s "$MODEL"
@@ -98,15 +98,15 @@ jobs:
           du -h "$MODEL"
 
       - name: Prepare model-free update
-        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.bundle_model }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.bundle_model) }}
         run: mkdir -p app/src/main/assets/model
 
       - name: Build APK
-        run: gradle :app:assembleDebug --stacktrace
+        run: gradle :app:assembleRelease --stacktrace
 
       - name: Audit APK
         run: |
-          APK=app/build/outputs/apk/debug/app-debug.apk
+          APK=app/build/outputs/apk/release/app-release.apk
           test -f "$APK"
           sha256sum "$APK" | tee apk.sha256
           unzip -l "$APK" | tee apk-files.txt
@@ -117,9 +117,9 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: H33-DeepSeek-Coder-GGUF-${{ (github.event_name == 'workflow_dispatch' && !inputs.bundle_model) && 'UPDATE' || 'FULL' }}
+          name: H33-DeepSeek-Coder-GGUF-${{ (github.event_name == 'push' || !inputs.bundle_model) && 'UPDATE' || 'FULL' }}
           path: |
-            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
             apk.sha256
             apk-files.txt
           compression-level: 0

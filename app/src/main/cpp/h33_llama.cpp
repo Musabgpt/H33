@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -68,7 +69,7 @@ Java_com_musab_aragpt2_LlamaNative_open(JNIEnv * env, jclass, jstring path,
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jprompt,
-                                            jint max_tokens) {
+                                            jint max_tokens, jobject callback) {
     std::lock_guard<std::mutex> guard(g_lock);
     if (!g_model || !g_ctx) return js(env, "");
     g_cancel.store(false);
@@ -77,13 +78,16 @@ Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jpromp
     std::string prompt = from_jstring(env, jprompt);
     int count = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, true, true);
     if (count <= 0) return js(env, "");
-    if (count > 350) {
-        prompt = prompt.substr(prompt.size() / 2);
-        count = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, true, true);
-    }
     std::vector<llama_token> tokens(count);
     if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), tokens.data(), count, true, true) < 0) {
         return js(env, "");
+    }
+    // Always leave enough context for generation. Character-based truncation
+    // can split UTF-8 and does not reliably constrain the token count.
+    if (tokens.size() > 350) {
+        const llama_token bos = tokens.front();
+        tokens.erase(tokens.begin(), tokens.end() - 349);
+        tokens.front() = bos;
     }
 
     llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
@@ -93,19 +97,41 @@ Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jpromp
     llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
     std::string output;
     int position = 0;
+    jmethodID on_token = nullptr;
+    if (callback) {
+        jclass callback_class = env->GetObjectClass(callback);
+        on_token = env->GetMethodID(callback_class, "onToken", "(Ljava/lang/String;)V");
+        env->DeleteLocalRef(callback_class);
+        if (!on_token && env->ExceptionCheck()) env->ExceptionClear();
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
 
-    while (!g_cancel.load() && position + batch.n_tokens < 510 && max_tokens-- > 0) {
+    while (!g_cancel.load() && std::chrono::steady_clock::now() < deadline
+            && position + batch.n_tokens < 510 && max_tokens-- > 0) {
         if (llama_decode(g_ctx, batch) != 0) break;
         position += batch.n_tokens;
         llama_token token = llama_sampler_sample(sampler, g_ctx, -1);
         if (llama_vocab_is_eog(vocab, token)) break;
         char small[256];
         int n = llama_token_to_piece(vocab, token, small, sizeof(small), 0, true);
+        std::string piece;
         if (n < 0) {
             std::vector<char> large(static_cast<size_t>(-n));
             n = llama_token_to_piece(vocab, token, large.data(), large.size(), 0, true);
-            if (n > 0) output.append(large.data(), n);
-        } else if (n > 0) output.append(small, n);
+            if (n > 0) piece.assign(large.data(), n);
+        } else if (n > 0) piece.assign(small, n);
+        if (!piece.empty()) {
+            output.append(piece);
+            if (callback && on_token) {
+                jstring token_text = js(env, piece);
+                env->CallVoidMethod(callback, on_token, token_text);
+                env->DeleteLocalRef(token_text);
+                if (env->ExceptionCheck()) {
+                    env->ExceptionClear();
+                    g_cancel.store(true);
+                }
+            }
+        }
         batch = llama_batch_get_one(&token, 1);
         if (output.find("<|EOT|>") != std::string::npos) break;
     }
