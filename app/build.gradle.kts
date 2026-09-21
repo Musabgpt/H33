@@ -10,8 +10,8 @@ android {
         applicationId = "com.musab.aragpt2"
         minSdk = 28
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.9.0-deepseek-fast-full"
+        versionCode = 11
+        versionName = "0.9.1-deepseek-arm-q3"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
