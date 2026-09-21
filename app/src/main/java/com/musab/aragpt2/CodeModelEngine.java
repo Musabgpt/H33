@@ -28,8 +28,8 @@ public final class CodeModelEngine implements AutoCloseable {
     private static final String MODEL_ASSET = "model/deepseek-coder-1.3b-q4_k_m.gguf";
     private static final String MODEL_FILE = "deepseek-coder-1.3b-q4_k_m.gguf";
     private static final String CHAT_FILE = "current_chat.jsonl";
-    private static final int MAX_HISTORY_MESSAGES = 4;
-    private static final int MAX_PROMPT_CHARS = 7000;
+    private static final int MAX_HISTORY_MESSAGES = 2;
+    private static final int MAX_PROMPT_CHARS = 2400;
     private static final long MIN_MODEL_BYTES = 450L * 1024L * 1024L;
     private static final Pattern TOOL_CALL = Pattern.compile(
             "<tool_call\\s+name=\\\"([a-zA-Z0-9_.-]{1,48})\\\">([\\s\\S]*?)</tool_call>");
@@ -52,7 +52,7 @@ public final class CodeModelEngine implements AutoCloseable {
 
         File model = prepareModelFile();
         LlamaNative.load();
-        String error = LlamaNative.open(model.getAbsolutePath(), 512, 4);
+        String error = LlamaNative.open(model.getAbsolutePath(), 384, 4);
         if (error != null && !error.isEmpty()) throw new IllegalStateException(error);
     }
 
@@ -64,7 +64,7 @@ public final class CodeModelEngine implements AutoCloseable {
         StringBuilder streamed = new StringBuilder();
         String answer = LlamaNative.generate(
                 buildPrompt(q),
-                Math.min(160, Math.max(16, maxNewTokens)),
+                Math.min(128, Math.max(16, maxNewTokens)),
                 token -> {
                     streamed.append(token);
                     String visible = cleanup(streamed.toString());
@@ -115,7 +115,7 @@ public final class CodeModelEngine implements AutoCloseable {
     }
 
     private synchronized String buildPrompt(String question) {
-        StringBuilder p = new StringBuilder(SYSTEM).append(tools.promptDescription()).append("\n\n");
+        StringBuilder p = new StringBuilder(SYSTEM).append("\n\n");
         for (ConversationHistory.Turn t : conversation.snapshot()) {
             if ("user".equals(t.role)) p.append("### Instruction:\n").append(t.content).append('\n');
             else if ("assistant".equals(t.role)) p.append("### Response:\n").append(t.content).append("\n<|EOT|>\n");
