@@ -10,8 +10,8 @@ android {
         applicationId = "com.musab.aragpt2"
         minSdk = 28
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0-deepseek-coder"
+        versionCode = 6
+        versionName = "0.6.0-deepseek-lite"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -28,17 +28,12 @@ android {
         noCompress += listOf("onnx", "data", "json", "txt", "model")
     }
 
-    packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
-    }
+    packaging { resources.excludes += setOf("META-INF/**", "kotlin/**") }
 }
 
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("com.google.android.material:material:1.13.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.0")
     implementation(files("libs/onnxruntime-genai.aar"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250517")

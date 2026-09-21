@@ -1,57 +1,40 @@
-# H33 — AraGPT2 Android مع تعلّم تعزيز محلي
+# H33 DeepSeek Coder Lite
 
-تطبيق Android عربي يشغّل `aubmindlab/aragpt2-base` محليًا، ومعه طبقة تعلم صغيرة **Reward Adapter** تتغير أوزانها على الهاتف من تقييم المستخدم.
+تطبيق Android محلي يشغّل `deepseek-ai/deepseek-coder-1.3b-instruct` بصيغة INT4 عبر ONNX Runtime GenAI.
 
-## الواجهة
-التطبيق يحتوي ثلاث خانات واضحة:
-1. **السؤال** — اكتب السؤال ثم اضغط `اسأل النموذج`.
-2. **جواب النموذج** — يظهر جواب AraGPT2.
-3. **التصحيح** — إذا كان الجواب خطأ اكتب الجواب الأفضل.
+## ما بقي في التطبيق
 
-والأزرار:
-- `✓ الإجابة صحيحة — عززها`: يعطي Reward موجبًا للجواب الحالي ويحدّث أوزان الـAdapter.
-- `علّم النموذج من التصحيح`: يعطي Reward سلبيًا صغيرًا للجواب القديم ثم Reward موجبًا أقوى للتصحيح.
-- `مسح الحقول`: يمسح الواجهة فقط ولا يحذف التعلم.
+- نموذج واحد فقط: DeepSeek-Coder 1.3B Instruct INT4.
+- محادثة محلية بذاكرة قصيرة محفوظة على الجهاز.
+- بث الجواب وإيقاف التوليد ونسخ/حفظ الجواب كملف TXT.
+- واجهة أدوات عامة: أي أداة محلية جديدة تطبّق `LocalTool` ثم تُسجّل في `ToolRegistry`.
+- أداتان مثاليتان خفيفتان: معلومات الجهاز والوقت.
 
-## كيف يتعلم؟
-تدريب جميع أوزان AraGPT2 (135M) مباشرة على CPU الهاتف بعد كل جواب مكلف جدًا في RAM والحرارة والوقت. لذلك التطبيق يستخدم تصميمًا عمليًا:
+لا يملك التطبيق إذن الإنترنت، ولا يحتوي Google AI أو بحث ويب أو نموذجًا مستضافًا أو AraGPT/Qwen.
 
-- AraGPT2 الأساسي يعمل كـ **INT8 frozen backbone**.
-- النموذج يصدر رسميًا عبر Hugging Face Optimum ONNX ويعيد logits لكل token.
-- فوقه يوجد **context-aware Reward Adapter** برتبة 8، بحوالي 512 ألف وزن قابل للتعلّم (قرابة 2 MB).
-- سياق الـAdapter يُشتق من آخر tokens في السؤال/السياق بواسطة features حتمية صغيرة، لذلك التحديث مرتبط بالسياق وليس مجرد bias عام.
-- التحديث هو REINFORCE-style policy update على top-k: التقييم الصحيح يزيد احتمال tokens التي وافقت عليها، والتقييم السلبي يخفضها، والتصحيح يقوي tokens الجواب الذي كتبته.
-- أوزان الـAdapter تحفظ في `reward_adapter_v2.bin` داخل مساحة التطبيق وتعود تلقائيًا بعد إغلاق/فتح التطبيق.
-- feedback يحفظ محليًا في `feedback.jsonl` ولا يرسل إلى أي خادم.
+## إصلاح tokenizer
 
-**مهم:** هذه ليست PPO كاملة ولا تعيد تدريب الـ135M بارامتر الأساسي. الذي يتغير فعليًا هو أوزان الـReward Adapter المتصلة مباشرةً بالـlogits، وهذا مقصود حتى يكون التعلم الفوري ممكنًا على الهاتف.
+DeepSeek يستخدم تعبير GPT regex يحتوي Unicode properties مثل `\p{L}` و`\p{N}`. محرك regex في ORT GenAI Android 0.15.2 لا يقبل هذا الشكل. خطوة البناء تشغّل `scripts/patch_ort_tokenizer.py` لتحويل pre-tokenizer إلى تعبير ASCII مكافئ لمسار Python/code، ثم تنشئ `Model` و`Tokenizer` وتنفذ encode حقيقي قبل بناء APK. إذا فشل الاختبار يتوقف البناء ولا يرفع APK معطوبًا.
 
-## حالة البناء
-تم التحقق من المسار كاملًا عبر GitHub Actions:
-- تصدير AraGPT2 إلى ONNX: ناجح.
-- Quantization إلى INT8: ناجح.
-- ONNX smoke test: ناجح.
-- Android SDK / Java / Gradle: ناجح.
-- `assembleDebug`: ناجح.
-- رفع APK كـ artifact: ناجح.
+## البناء
 
-حجم نموذج INT8 الناتج في آخر build كان قرابة **320 MB**.
+من GitHub Actions شغّل **Build H33 DeepSeek Coder INT4 APK**. الناتج:
 
-## بناء APK من GitHub Actions
-1. افتح تبويب **Actions**.
-2. اختر **Build H33 AraGPT2 Learning APK**.
-3. اضغط **Run workflow**.
-4. عند النجاح نزّل artifact باسم `AraGPT2-Android-APK`.
+`H33-DeepSeek-Coder-Lite-APK`
 
-البناء صار **يدويًا عند الطلب** بدل أن يعمل عند كل commit، لأن تصدير النموذج الكبير في كل تعديل غير ضروري.
+البناء ARM64 فقط. النموذج نفسه يشكل معظم الحجم؛ حذف المسارات القديمة يقلل كود التطبيق واعتماداته، لكن لا يمكن جعل DeepSeek-Coder 1.3B صغيرًا مثل نموذج 0.5B دون استبداله أو خفض جودة تكميمه.
 
-## تفاصيل تقنية
-- Android ARM64 فقط.
-- `minSdk=28`, `targetSdk=36`, `compileSdk=36`.
-- ONNX Runtime Android 1.30.0.
-- سياق التطبيق 192 token لتقليل الضغط على الهاتف.
-- حد التدريب لكل تصحيح 48 token حتى لا يبقى الهاتف في تحديث طويل.
-- الـAdapter محفوظ بشكل ذري (ملف مؤقت ثم rename) لتقليل خطر فساد ملف التعلم إذا أُغلق التطبيق أثناء الحفظ.
+## ربط أداة
 
-## ملاحظة عن AraGPT2
-AraGPT2-base نموذج إكمال نص عربي قديم وليس Instruction Chat Model؛ لذلك حتى مع التعلم المحلي ستبقى قدرته الأساسية محدودة مقارنة بنماذج المحادثة الحديثة. فائدة الـAdapter هنا هي **التخصيص التدريجي** بناءً على تصحيحاتك، لا تحويل 135M إلى نموذج بمستوى نماذج ضخمة.
+نفّذ الواجهة التالية ثم سجّلها:
+
+```java
+tools.register(new LocalTool() {
+    public String name() { return "my_tool"; }
+    public String displayName() { return "أداتي"; }
+    public String description() { return "What the tool does and its arguments."; }
+    public String execute(String arguments) throws Exception { return "result"; }
+});
+```
+
+النموذج يستدعي الأداة بصيغة `<tool_call ...>`، والتطبيق يعيد النتيجة إلى DeepSeek ليكتب الجواب النهائي. لا تُمنح أي أداة صلاحيات تلقائيًا؛ صلاحياتها يحدد تنفيذها في Android.

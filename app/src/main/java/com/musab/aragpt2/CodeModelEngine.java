@@ -22,8 +22,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class CodeModelEngine implements AutoCloseable {
+    public interface StreamListener { void onUpdate(String text); }
     public static final class ChatTurn {
         public final String turnId;
         public final String role;
@@ -47,21 +50,25 @@ public final class CodeModelEngine implements AutoCloseable {
             "Prefer correct, runnable Python 3 code with concise explanations. " +
             "Do not invent package APIs. If the request is not about Python programming, " +
             "say that the local Python model is not intended for that task. " +
-            "Answer in English. Never claim web access.";
+            "Reply in the same language as the user. Never claim web access.";
+    private static final Pattern TOOL_CALL = Pattern.compile(
+            "<tool_call\\s+name=\\\"([a-zA-Z0-9_.-]{1,48})\\\">([\\s\\S]*?)</tool_call>");
 
     private final Context context;
     private final Model model;
     private final Tokenizer tokenizer;
     private final File chatFile;
     private final ConversationFileStore chatStore;
+    private final ToolRegistry tools;
     private final String chatTemplate;
     private final ConversationHistory conversation =
             new ConversationHistory(MAX_HISTORY_MESSAGES);
 
     private volatile boolean cancelRequested = false;
 
-    public CodeModelEngine(Context context) throws Exception {
+    public CodeModelEngine(Context context, ToolRegistry tools) throws Exception {
         this.context = context.getApplicationContext();
+        this.tools = tools == null ? new ToolRegistry() : tools;
         this.chatFile = new File(this.context.getFilesDir(), CHAT_FILE);
         this.chatStore = new ConversationFileStore(this.chatFile);
 
@@ -81,7 +88,7 @@ public final class CodeModelEngine implements AutoCloseable {
     public String generateCandidate(
             String question,
             int maxNewTokens,
-            LocalInferenceEngine.StreamListener listener) throws Exception {
+            StreamListener listener) throws Exception {
         String q = clean(question);
         if (q.isEmpty()) return "";
 
@@ -121,7 +128,15 @@ public final class CodeModelEngine implements AutoCloseable {
             }
         }
 
-        return cleanup(raw.toString());
+        String first = cleanup(raw.toString());
+        Matcher call = TOOL_CALL.matcher(first);
+        if (!call.find()) return first;
+        LocalTool tool = tools.get(call.group(1));
+        if (tool == null) return first;
+        String result;
+        try { result = tool.execute(call.group(2).trim()); }
+        catch (Exception error) { result = "Tool error: " + error.getMessage(); }
+        return generateAfterTool(snapshot, q, call.group(1), result, maxNewTokens, listener);
     }
 
     public void cancelGeneration() {
@@ -198,7 +213,7 @@ public final class CodeModelEngine implements AutoCloseable {
         if (!chatTemplate.trim().isEmpty()) {
             try {
                 JSONArray messages = new JSONArray();
-                addMessage(messages, "system", SYSTEM_PROMPT);
+                addMessage(messages, "system", SYSTEM_PROMPT + tools.promptDescription());
 
                 int start = Math.max(0, history.size() - MAX_HISTORY_MESSAGES);
                 for (int i = start; i < history.size(); i++) {
@@ -224,7 +239,7 @@ public final class CodeModelEngine implements AutoCloseable {
         }
 
         StringBuilder out = new StringBuilder();
-        out.append(SYSTEM_PROMPT).append("\n\n");
+        out.append(SYSTEM_PROMPT).append(tools.promptDescription()).append("\n\n");
 
         int start = Math.max(0, history.size() - MAX_HISTORY_MESSAGES);
         for (int i = start; i < history.size(); i++) {
@@ -244,6 +259,34 @@ public final class CodeModelEngine implements AutoCloseable {
                 .append(question)
                 .append("\n### Response:\n");
         return out.toString();
+    }
+
+    private String generateAfterTool(List<ChatTurn> history, String question,
+            String toolName, String toolResult, int maxNewTokens,
+            StreamListener listener) throws Exception {
+        String augmented = question + "\n\nLocal tool " + toolName
+                + " returned:\n" + toolResult + "\nUse it in the final answer.";
+        StringBuilder raw = new StringBuilder();
+        try (Sequences encoded = encodeTrimmedPrompt(history, augmented);
+             GeneratorParams params = new GeneratorParams(model)) {
+            int[] ids = encoded.getSequence(0);
+            params.setSearchOption("max_length", (double)Math.min(4096,
+                    ids.length + Math.max(16, maxNewTokens)));
+            params.setSearchOption("do_sample", false);
+            params.setSearchOption("repetition_penalty", 1.08);
+            try (Generator generator = new Generator(model, params);
+                 TokenizerStream stream = tokenizer.createStream()) {
+                generator.appendTokenSequences(encoded);
+                while (!generator.isDone() && !cancelRequested) {
+                    generator.generateNextToken();
+                    raw.append(stream.decode(generator.getLastTokenInSequence(0)));
+                    String visible = cleanup(raw.toString());
+                    if (listener != null && !visible.isEmpty()) listener.onUpdate(visible);
+                    if (containsStopMarker(raw)) break;
+                }
+            }
+        }
+        return cleanup(raw.toString());
     }
 
     private static void addMessage(
