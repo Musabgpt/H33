@@ -4,35 +4,44 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
 import android.widget.TextView;
 
-import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStream;
+import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** One-time system picker used to import the external GGUF model into app-private storage. */
+/**
+ * System picker for an external GGUF model.
+ *
+ * The selected model stays where the user already has it. We persist the SAF URI
+ * instead of copying the model into the APK or app-private storage.
+ */
 public final class ModelImportActivity extends Activity {
+    public static final String PREFS = "h33_model";
+    public static final String KEY_URI = "gguf_uri";
     private static final int PICK_MODEL = 7001;
-    private final ExecutorService copyExecutor = Executors.newSingleThreadExecutor();
+
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private TextView status;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         status = new TextView(this);
-        status.setText("H33\n\nاختر ملف DeepSeek-Coder GGUF");
+        status.setText("H33\n\nاختر ملف DeepSeek-Coder GGUF الموجود على جهازك");
         status.setTextSize(20f);
         status.setPadding(48, 80, 48, 48);
         setContentView(status);
+        openPicker();
+    }
 
+    private void openPicker() {
         Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         picker.addCategory(Intent.CATEGORY_OPENABLE);
-        picker.setType("application/octet-stream");
-        picker.putExtra(Intent.EXTRA_MIME_TYPES,
-                new String[]{"application/octet-stream", "application/x-gguf"});
+        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        picker.setType("*/*");
         picker.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
         startActivityForResult(picker, PICK_MODEL);
     }
@@ -47,83 +56,81 @@ public final class ModelImportActivity extends Activity {
         }
 
         Uri uri = data.getData();
-        status.setText("جاري نسخ نموذج GGUF إلى تخزين H33…\n\nقد يستغرق ذلك عدة دقائق.");
-        copyExecutor.execute(() -> importModel(uri));
+        int takeFlags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        try {
+            if ((data.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0) {
+                getContentResolver().takePersistableUriPermission(uri, takeFlags);
+            }
+        } catch (SecurityException ignored) {
+            // Some providers do not expose persistable permissions. We can still
+            // validate and use the URI for this session, but it may need re-selection later.
+        }
+
+        status.setText("جاري فحص ملف GGUF…");
+        executor.execute(() -> validateAndSave(uri));
     }
 
-    private void importModel(Uri uri) {
+    private void validateAndSave(Uri uri) {
         try {
-            File dir = new File(getFilesDir(), "models");
-            if (!dir.exists() && !dir.mkdirs()) {
-                throw new IllegalStateException("Cannot create model directory");
+            String name = queryDisplayName(uri);
+            if (name != null && !isGgufName(name)) {
+                throw new IllegalArgumentException("اختر ملفًا بامتداد .gguf");
             }
-            File temp = new File(dir, "deepseek-coder.tmp.gguf");
-            File target = new File(dir, "deepseek-coder-1.3b-instruct.Q4_K_M.gguf");
-
-            try (InputStream in = getContentResolver().openInputStream(uri);
-                 FileOutputStream out = new FileOutputStream(temp)) {
-                if (in == null) throw new IllegalStateException("Cannot open selected file");
-                byte[] buffer = new byte[8 * 1024 * 1024];
-                int n;
-                long total = 0;
-                while ((n = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, n);
-                    total += n;
-                    if (total > 2L * 1024L * 1024L * 1024L) {
-                        throw new IllegalStateException("Model is unexpectedly larger than 2 GB");
-                    }
-                    final long copied = total;
-                    if ((total % (64L * 1024L * 1024L)) < n) {
-                        runOnUiThread(() -> status.setText(
-                                "جاري نسخ النموذج… " +
-                                (copied / (1024L * 1024L)) + " MB"));
-                    }
-                }
-                out.getFD().sync();
-            }
-
-            if (!hasGgufMagic(temp)) {
-                temp.delete();
+            if (!hasGgufMagic(uri)) {
                 throw new IllegalArgumentException("الملف المحدد ليس GGUF صالحًا");
             }
 
-            if (target.exists() && !target.delete()) {
-                throw new IllegalStateException("Cannot replace existing model");
-            }
-            if (!temp.renameTo(target)) {
-                try (FileInputStream in = new FileInputStream(temp);
-                     FileOutputStream out = new FileOutputStream(target)) {
-                    byte[] buffer = new byte[8 * 1024 * 1024];
-                    int n;
-                    while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
-                    out.getFD().sync();
-                }
-                temp.delete();
-            }
+            getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_URI, uri.toString())
+                    .apply();
 
             runOnUiThread(() -> {
-                status.setText("تم استيراد النموذج. جاري تشغيل H33…");
+                status.setText("تم ربط نموذج GGUF الخارجي. جاري تشغيل H33…");
                 setResult(RESULT_OK);
                 finish();
             });
         } catch (Exception ex) {
-            runOnUiThread(() -> new android.app.AlertDialog.Builder(this)
-                    .setTitle("فشل استيراد النموذج")
-                    .setMessage(ex.getMessage() == null ? "خطأ غير معروف" : ex.getMessage())
-                    .setPositiveButton("إغلاق", (d, w) -> finish())
-                    .show());
+            runOnUiThread(() -> {
+                status.setText("فشل اختيار النموذج: " +
+                        (ex.getMessage() == null ? "خطأ غير معروف" : ex.getMessage()));
+            });
         }
     }
 
-    private static boolean hasGgufMagic(File file) throws Exception {
-        try (FileInputStream in = new FileInputStream(file)) {
-            return in.read() == 'G' && in.read() == 'G' && in.read() == 'U' && in.read() == 'F';
+    static boolean isGgufName(String name) {
+        return name != null && name.toLowerCase(java.util.Locale.ROOT).endsWith(".gguf");
+    }
+
+    private String queryDisplayName(Uri uri) {
+        android.database.Cursor cursor = getContentResolver().query(
+                uri,
+                new String[]{android.provider.OpenableColumns.DISPLAY_NAME},
+                null,
+                null,
+                null);
+        if (cursor == null) return null;
+        try {
+            if (!cursor.moveToFirst()) return null;
+            int index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+            return index >= 0 ? cursor.getString(index) : null;
+        } finally {
+            cursor.close();
+        }
+    }
+
+    private boolean hasGgufMagic(Uri uri) throws IOException {
+        try (ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r")) {
+            if (pfd == null) throw new IOException("Cannot open selected model");
+            try (FileInputStream in = new FileInputStream(pfd.getFileDescriptor())) {
+                return in.read() == 'G' && in.read() == 'G' && in.read() == 'U' && in.read() == 'F';
+            }
         }
     }
 
     @Override
     protected void onDestroy() {
-        copyExecutor.shutdownNow();
+        executor.shutdownNow();
         super.onDestroy();
     }
 }
