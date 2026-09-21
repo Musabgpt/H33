@@ -5,6 +5,7 @@ plugins {
 android {
     namespace = "com.musab.aragpt2"
     compileSdk = 36
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "com.musab.aragpt2"
