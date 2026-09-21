@@ -4,6 +4,7 @@ import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -26,7 +27,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 import android.webkit.CookieManager;
 import android.webkit.WebResourceRequest;
-import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -43,30 +43,24 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-
     private CodeModelEngine engine;
     private LocalInferenceEngine localInference;
     private CandidateCoordinator candidateCoordinator;
     private PreferenceStore preferenceStore;
     private UserDecisionService userDecisionService;
-    private LinearLayout rootLayout;
-    private TextView status;
+    private LinearLayout rootLayout, messagesContainer, composerBar;
     private ScrollView chatScroll;
-    private LinearLayout messagesContainer;
-    private LinearLayout composerBar;
+    private TextView status;
     private EditText inputBox;
     private Button sendButton, stopButton, newChatButton, plusButton;
-
     private volatile long generationId = 0L;
     private boolean busy = false;
     private String lastAssistantAnswer = "";
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
-
         rootLayout = findViewById(R.id.rootLayout);
         status = findViewById(R.id.status);
         chatScroll = findViewById(R.id.chatScroll);
@@ -77,177 +71,89 @@ public class MainActivity extends AppCompatActivity {
         stopButton = findViewById(R.id.stopButton);
         newChatButton = findViewById(R.id.newChatButton);
         plusButton = findViewById(R.id.plusButton);
-
         styleComposer();
         installInsetsHandling();
         addWelcomeMessage();
-
-        setBusy(true, "جاري تحميل DeepSeek-Coder 1.3B INT4…");
-        stopButton.setVisibility(View.GONE);
-
+        setBusy(true, "جاري تحميل DeepSeek-Coder عبر llama.cpp…");
         executor.execute(() -> {
             try {
                 engine = new CodeModelEngine(this);
-                localInference = new OrtGenAiLocalInferenceEngine(engine);
+                localInference = new NativeLocalInferenceEngine(engine);
                 preferenceStore = new PreferenceStore(this);
-                userDecisionService = new UserDecisionService(
-                        preferenceStore,
-                        new UserDecisionService.CanonicalMemory() {
-                            @Override
-                            public String get(String turnId) {
-                                return engine.getCanonicalAnswer(turnId);
-                            }
-
-                            @Override
-                            public void commit(
-                                    String turnId, String question, String answer)
-                                    throws Exception {
-                                engine.commitCanonicalTurn(turnId, question, answer);
-                            }
-
-                            @Override
-                            public boolean replace(String turnId, String answer)
-                                    throws Exception {
-                                return engine.replaceCanonicalAnswer(turnId, answer);
-                            }
-
-                            @Override
-                            public boolean remove(String turnId) throws Exception {
-                                return engine.removeCanonicalTurn(turnId);
-                            }
-                        }
-                );
+                userDecisionService = new UserDecisionService(preferenceStore, new UserDecisionService.CanonicalMemory() {
+                    @Override public String get(String turnId) { return engine.getCanonicalAnswer(turnId); }
+                    @Override public void commit(String turnId, String q, String a) throws Exception { engine.commitCanonicalTurn(turnId, q, a); }
+                    @Override public boolean replace(String turnId, String a) throws Exception { return engine.replaceCanonicalAnswer(turnId, a); }
+                    @Override public boolean remove(String turnId) throws Exception { return engine.removeCanonicalTurn(turnId); }
+                });
                 candidateCoordinator = new CandidateCoordinator(
-                        new DeepSeekCoderLocalAnswerProvider(
-                                localInference, 320),
-                        new ExtractiveWebEvidenceAnswerProvider(
-                                new WebEvidenceRetriever(5)),
-                        new GoogleAiOverviewProvider(this)
-                );
-
+                        new DeepSeekCoderLocalAnswerProvider(localInference, 320),
+                        new ExtractiveWebEvidenceAnswerProvider(new WebEvidenceRetriever(5)),
+                        new GoogleAiOverviewProvider(this));
                 List<CodeModelEngine.ChatTurn> turns = engine.getConversationSnapshot();
                 int preferences = preferenceStore.eventCount();
-
                 runOnUiThread(() -> {
                     messagesContainer.removeAllViews();
-                    if (turns.isEmpty()) addWelcomeMessage();
-                    else renderConversation(turns);
-                    setBusy(false, "جاهز • DeepSeek Python • ذاكرة مستخدم: "
-                            + preferences);
+                    if (turns.isEmpty()) addWelcomeMessage(); else renderConversation(turns);
+                    setBusy(false, "جاهز • DeepSeek Python • ذاكرة مستخدم: " + preferences);
                 });
             } catch (Exception ex) {
-                runOnUiThread(() -> {
-                    setBusy(true, "تعذر تحميل DeepSeek-Coder: " + safeMessage(ex));
-                    newChatButton.setEnabled(true);
-                });
+                runOnUiThread(() -> setBusy(true, "تعذر تحميل DeepSeek: " + safeMessage(ex)));
             }
         });
-
         sendButton.setOnClickListener(v -> sendMessage());
         stopButton.setOnClickListener(v -> stopGeneration());
         newChatButton.setOnClickListener(v -> startNewChat());
         plusButton.setOnClickListener(v -> showComposerMenu());
-
         inputBox.setOnEditorActionListener((v, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_SEND) {
-                sendMessage();
-                return true;
-            }
+            if (actionId == EditorInfo.IME_ACTION_SEND) { sendMessage(); return true; }
             return false;
         });
     }
 
     private void installInsetsHandling() {
-        ViewCompat.setOnApplyWindowInsetsListener(rootLayout, (v, windowInsets) -> {
-            Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
-            Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
-            boolean imeVisible = windowInsets.isVisible(WindowInsetsCompat.Type.ime());
-
-            rootLayout.setPadding(
-                    dp(12) + bars.left,
-                    dp(10) + bars.top,
-                    dp(12) + bars.right,
-                    0
-            );
-
-            ViewGroup.MarginLayoutParams lp =
-                    (ViewGroup.MarginLayoutParams) composerBar.getLayoutParams();
-
-            int targetBottom = (imeVisible ? ime.bottom : bars.bottom) + dp(8);
-            if (lp.bottomMargin != targetBottom) {
-                lp.bottomMargin = targetBottom;
-                composerBar.setLayoutParams(lp);
-            }
-
-            if (imeVisible) scrollToBottom();
-            return windowInsets;
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout, (v, wi) -> {
+            Insets bars = wi.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets ime = wi.getInsets(WindowInsetsCompat.Type.ime());
+            boolean visible = wi.isVisible(WindowInsetsCompat.Type.ime());
+            rootLayout.setPadding(dp(12) + bars.left, dp(10) + bars.top, dp(12) + bars.right, 0);
+            ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) composerBar.getLayoutParams();
+            lp.bottomMargin = (visible ? ime.bottom : bars.bottom) + dp(8);
+            composerBar.setLayoutParams(lp);
+            if (visible) scrollToBottom();
+            return wi;
         });
-
-        ViewCompat.requestApplyInsets(rootLayout);
     }
 
     private void styleComposer() {
-        boolean night = (getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-
-        int composerColor = night ? Color.rgb(47, 47, 47) : Color.rgb(242, 242, 242);
-        int iconColor = night ? Color.rgb(73, 73, 73) : Color.rgb(225, 225, 225);
-        int sendColor = night ? Color.WHITE : Color.rgb(25, 25, 25);
-        int sendText = night ? Color.BLACK : Color.WHITE;
-        int normalText = night ? Color.WHITE : Color.rgb(25, 25, 25);
-
+        boolean night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
         GradientDrawable composer = new GradientDrawable();
-        composer.setColor(composerColor);
+        composer.setColor(night ? Color.rgb(47,47,47) : Color.rgb(242,242,242));
         composer.setCornerRadius(dp(28));
         composerBar.setBackground(composer);
-        composerBar.setElevation(dp(6));
-
-        inputBox.setTextColor(normalText);
-        inputBox.setHintTextColor(night ? Color.rgb(175, 175, 175) : Color.rgb(110, 110, 110));
-
-        styleRoundButton(plusButton, iconColor, normalText);
-        styleRoundButton(stopButton, iconColor, normalText);
-        styleRoundButton(sendButton, sendColor, sendText);
+        inputBox.setTextColor(night ? Color.WHITE : Color.rgb(25,25,25));
+        inputBox.setHintTextColor(night ? Color.rgb(175,175,175) : Color.rgb(110,110,110));
+        styleRoundButton(plusButton, night ? Color.rgb(73,73,73) : Color.rgb(225,225,225), Color.WHITE);
+        styleRoundButton(stopButton, night ? Color.rgb(73,73,73) : Color.rgb(225,225,225), Color.WHITE);
+        styleRoundButton(sendButton, night ? Color.WHITE : Color.rgb(25,25,25), night ? Color.BLACK : Color.WHITE);
     }
 
-    private void styleRoundButton(Button button, int background, int foreground) {
-        GradientDrawable d = new GradientDrawable();
-        d.setShape(GradientDrawable.OVAL);
-        d.setColor(background);
-        button.setBackground(d);
-        button.setTextColor(foreground);
-        button.setElevation(dp(2));
+    private void styleRoundButton(Button b, int bg, int fg) {
+        GradientDrawable d = new GradientDrawable(); d.setShape(GradientDrawable.OVAL); d.setColor(bg);
+        b.setBackground(d); b.setTextColor(fg); b.setElevation(dp(2));
     }
 
     private void showComposerMenu() {
         PopupMenu menu = new PopupMenu(this, plusButton);
-        menu.getMenu().add("💾 حفظ آخر جواب TXT");
-        menu.getMenu().add("🧠 تصدير بيانات التعلم");
+        menu.getMenu().add("استيراد/تبديل نموذج GGUF");
         menu.getMenu().add("محادثة جديدة");
         menu.getMenu().add("مسح النص");
-        menu.getMenu().add("إخفاء لوحة المفاتيح");
-
         menu.setOnMenuItemClickListener(item -> {
-            String title = item.getTitle().toString();
-
-            if (title.startsWith("💾")) {
-                if (lastAssistantAnswer.isEmpty()) {
-                    Toast.makeText(this, "لا يوجد جواب لحفظه", Toast.LENGTH_SHORT).show();
-                } else {
-                    saveTextFile("H33_" + System.currentTimeMillis() + ".txt",
-                            lastAssistantAnswer);
-                }
-            } else if (title.startsWith("🧠")) {
-                exportPreferenceDatasets();
-            } else if ("محادثة جديدة".equals(title)) {
-                startNewChat();
-            } else if ("مسح النص".equals(title)) {
-                inputBox.setText("");
-            } else {
-                InputMethodManager imm =
-                        (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-                imm.hideSoftInputFromWindow(inputBox.getWindowToken(), 0);
-            }
+            String t = item.getTitle().toString();
+            if (t.startsWith("استيراد")) {
+                startActivity(new Intent(this, ModelGateActivity.class));
+            } else if (t.equals("محادثة جديدة")) startNewChat();
+            else inputBox.setText("");
             return true;
         });
         menu.show();
@@ -255,726 +161,70 @@ public class MainActivity extends AppCompatActivity {
 
     private void sendMessage() {
         if (busy || engine == null || candidateCoordinator == null) return;
-
         String question = inputBox.getText().toString().trim();
         if (question.isEmpty()) return;
-
-        inputBox.setText("");
-        addUserBubble(question);
-
-        LinearLayout comparisonBlock = new LinearLayout(this);
-        comparisonBlock.setOrientation(LinearLayout.VERTICAL);
-        comparisonBlock.setGravity(Gravity.START);
-        comparisonBlock.setPadding(dp(2), dp(4), dp(2), dp(10));
-
-        TextView loadingLabel = new TextView(this);
-        loadingLabel.setText("H33 المحلي");
-        loadingLabel.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
-        loadingLabel.setTextSize(14f);
-        loadingLabel.setPadding(dp(6), dp(4), dp(6), dp(4));
-
-        TextView localStreamingBubble = createBubble("…", false);
-        comparisonBlock.addView(loadingLabel);
-        comparisonBlock.addView(localStreamingBubble);
-        messagesContainer.addView(comparisonBlock);
-        scrollToBottom();
-
-        final long myGeneration = ++generationId;
-        final long[] lastUiUpdate = {0L};
-        setBusy(true, "H33 يجهز المرشحين…");
-
+        inputBox.setText(""); addUserBubble(question);
+        LinearLayout block = new LinearLayout(this); block.setOrientation(LinearLayout.VERTICAL); block.setPadding(dp(2),dp(4),dp(2),dp(10));
+        TextView loading = new TextView(this); loading.setText("H33 المحلي"); loading.setTypeface(null,1);
+        TextView bubble = createBubble("…", false); block.addView(loading); block.addView(bubble); messagesContainer.addView(block); scrollToBottom();
+        final long id = ++generationId; final long[] lastUi = {0}; setBusy(true,"H33 يجهز المرشحين…");
         executor.execute(() -> {
             try {
-                CandidateSet set = candidateCoordinator.create(question, fullText -> {
-                    if (myGeneration != generationId) return;
-
-                    long now = SystemClock.uptimeMillis();
-                    if (now - lastUiUpdate[0] < 35) return;
-                    lastUiUpdate[0] = now;
-
-                    runOnUiThread(() -> {
-                        if (myGeneration != generationId) return;
-                        localStreamingBubble.setText(fullText);
-                        scrollToBottom();
-                    });
+                CandidateSet set = candidateCoordinator.create(question, full -> {
+                    if (id != generationId) return;
+                    long now = SystemClock.uptimeMillis(); if (now - lastUi[0] < 35) return; lastUi[0] = now;
+                    runOnUiThread(() -> { if (id == generationId) { bubble.setText(full); scrollToBottom(); } });
                 });
-
-                int preferenceCount =
-                        preferenceStore == null ? 0 : preferenceStore.eventCount();
-
-                runOnUiThread(() -> {
-                    if (myGeneration != generationId) return;
-                    renderCandidateComparison(comparisonBlock, set);
-
-                    AnswerCandidate first = firstAvailable(set);
-                    if (first != null) lastAssistantAnswer = first.answer;
-
-                    setBusy(false,
-                            "جاهز • اختر أفضل جواب • اختيارات محفوظة: " +
-                                    preferenceCount);
-                    scrollToBottom();
-                });
+                runOnUiThread(() -> { if (id == generationId) { renderCandidateComparison(block,set); setBusy(false,"جاهز • اختر أفضل جواب"); scrollToBottom(); } });
             } catch (Exception ex) {
-                runOnUiThread(() -> {
-                    if (myGeneration != generationId) return;
-                    comparisonBlock.removeAllViews();
-                    TextView error = createBubble(
-                            "تعذر إنشاء المرشحين: " + safeMessage(ex), false);
-                    comparisonBlock.addView(error);
-                    setBusy(false, "جاهز");
-                    scrollToBottom();
-                });
+                runOnUiThread(() -> { block.removeAllViews(); block.addView(createBubble("تعذر إنشاء المرشحين: " + safeMessage(ex),false)); setBusy(false,"جاهز"); });
             }
         });
     }
 
     private void renderCandidateComparison(LinearLayout block, CandidateSet set) {
         block.removeAllViews();
-
-        TextView heading = new TextView(this);
-        heading.setText("قارن الإجابات واختر الأنسب لك");
-        heading.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
-        heading.setTextSize(15f);
-        heading.setPadding(dp(6), dp(2), dp(6), dp(8));
-        block.addView(heading);
-
-        CandidateSelectionState state = new CandidateSelectionState(set.turnId);
-        ArrayList<Button> chooseButtons = new ArrayList<>();
-        final boolean[] decisionBusy = {false};
-
-        TextView selectedStatus = new TextView(this);
-        selectedStatus.setTextSize(13f);
-        selectedStatus.setPadding(dp(8), dp(8), dp(8), dp(4));
-
-        addCandidateCard(block, set, set.local, "H33 المحلي",
-                state, chooseButtons, selectedStatus, decisionBusy);
-        addCandidateCard(block, set, set.web, "جواب البحث",
-                state, chooseButtons, selectedStatus, decisionBusy);
-        addCandidateCard(block, set, set.hosted, "Google AI Overview",
-                state, chooseButtons, selectedStatus, decisionBusy);
-
+        TextView heading = new TextView(this); heading.setText("قارن الإجابات واختر الأنسب لك"); heading.setTypeface(null,1); heading.setPadding(dp(6),dp(2),dp(6),dp(8)); block.addView(heading);
+        CandidateSelectionState state = new CandidateSelectionState(set.turnId); ArrayList<Button> buttons = new ArrayList<>();
+        TextView selected = new TextView(this); selected.setPadding(dp(8),dp(8),dp(8),dp(4));
+        boolean[] decisionBusy = {false};
+        addCandidateCard(block,set,set.local,"H33 المحلي",state,buttons,selected,decisionBusy);
+        addCandidateCard(block,set,set.web,"جواب البحث",state,buttons,selected,decisionBusy);
+        addCandidateCard(block,set,set.hosted,"Google AI Overview",state,buttons,selected,decisionBusy);
         Button correction = smallButton("كلهم خطأ — سأكتب التصحيح");
-        correction.setOnClickListener(v -> {
-            if (decisionBusy[0]) {
-                Toast.makeText(this, "انتظر حفظ الاختيار الحالي", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            showComparisonCorrectionDialog(
-                    set, state, chooseButtons, selectedStatus, decisionBusy);
-        });
-
-        block.addView(correction);
-        block.addView(selectedStatus);
+        correction.setOnClickListener(v -> showCorrection(set,state,buttons,selected,decisionBusy)); block.addView(correction); block.addView(selected);
     }
 
-    private void addCandidateCard(
-            LinearLayout parent,
-            CandidateSet set,
-            AnswerCandidate candidate,
-            String label,
-            CandidateSelectionState state,
-            List<Button> chooseButtons,
-            TextView selectedStatus,
-            boolean[] decisionBusy) {
-
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(12), dp(10), dp(12), dp(10));
-
-        boolean night = (getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-
-        GradientDrawable cardBg = new GradientDrawable();
-        cardBg.setColor(night ? Color.rgb(34, 34, 34) : Color.rgb(248, 248, 248));
-        cardBg.setCornerRadius(dp(16));
-        cardBg.setStroke(dp(1),
-                night ? Color.rgb(75, 75, 75) : Color.rgb(220, 220, 220));
-        card.setBackground(cardBg);
-
-        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        cardLp.setMargins(0, 0, 0, dp(10));
-        card.setLayoutParams(cardLp);
-
-        TextView title = new TextView(this);
-        title.setText(label);
-        title.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
-        title.setTextSize(15f);
-        card.addView(title);
-
-        TextView provenance = new TextView(this);
-        String provider = candidate.provider.isEmpty() ? "غير محدد" : candidate.provider;
-        String detail = candidate.status.isEmpty() ? "" : " • " + candidate.status;
-        provenance.setText(provider + detail);
-        provenance.setTextSize(11f);
-        provenance.setAlpha(0.72f);
-        provenance.setPadding(0, dp(2), 0, dp(6));
-        card.addView(provenance);
-
-        if (!candidate.available) {
-            TextView unavailable = createBubble(
-                    candidate.status.isEmpty() ? "غير متاح" : candidate.status,
-                    false);
-            unavailable.setAlpha(0.75f);
-            card.addView(unavailable);
-
-            if (candidate.kind == AnswerCandidate.Kind.HOSTED
-                    && "google-ai-overview".equals(candidate.provider)
-                    && (GoogleAiOverviewProvider.CONSENT_REQUIRED_STATUS
-                            .equals(candidate.status)
-                        || GoogleAiOverviewProvider.CHALLENGE_STATUS
-                            .equals(candidate.status))) {
-                String actionText =
-                        GoogleAiOverviewProvider.CONSENT_REQUIRED_STATUS
-                                .equals(candidate.status)
-                                ? "فتح Google للموافقة"
-                                : "فتح Google للتحقق";
-                Button googleSetup = smallButton(actionText);
-                googleSetup.setOnClickListener(v ->
-                        showGoogleInteractionDialog(set.question));
-                card.addView(googleSetup);
-            }
-
-            parent.addView(card);
-            return;
-        }
-
-        TextView answer = createBubble(candidate.answer, false);
-        card.addView(answer);
-
-        if (!candidate.sources.isEmpty()) {
-            TextView sources = new TextView(this);
-            StringBuilder text = new StringBuilder("المصادر");
-            int index = 1;
-            for (SearchResult source : candidate.sources) {
-                text.append("\n[").append(index++).append("] ");
-                if (!source.title.isEmpty()) text.append(source.title);
-                else text.append(source.host);
-                if (!source.url.isEmpty()) text.append("\n").append(source.url);
-            }
-            sources.setText(text.toString());
-            sources.setTextSize(12f);
-            sources.setAutoLinkMask(Linkify.WEB_URLS);
-            sources.setLinksClickable(true);
-            sources.setMovementMethod(LinkMovementMethod.getInstance());
-            sources.setTextIsSelectable(true);
-            sources.setPadding(dp(6), dp(8), dp(6), dp(4));
-            card.addView(sources);
-        }
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.START);
-        actions.setPadding(0, dp(6), 0, 0);
-
-        Button choose = smallButton("اختر هذا الجواب");
-        Button copy = smallButton("نسخ");
-        Button txt = smallButton("TXT");
-        chooseButtons.add(choose);
-
-        choose.setOnClickListener(v -> handleCandidateSelection(
-                set, candidate, label, state, chooseButtons,
-                selectedStatus, decisionBusy));
-
-        copy.setOnClickListener(v -> copyText(candidate.answer));
-        txt.setOnClickListener(v ->
-                saveTextFile("H33_" + System.currentTimeMillis() + ".txt",
-                        candidate.answer));
-
-        actions.addView(choose);
-        actions.addView(copy);
-        actions.addView(txt);
-        card.addView(actions);
-        parent.addView(card);
+    private void addCandidateCard(LinearLayout parent,CandidateSet set,AnswerCandidate candidate,String label,CandidateSelectionState state,List<Button> chooseButtons,TextView selected,boolean[] decisionBusy) {
+        LinearLayout card = new LinearLayout(this); card.setOrientation(LinearLayout.VERTICAL); card.setPadding(dp(12),dp(10),dp(12),dp(10));
+        GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.rgb(38,38,38)); bg.setCornerRadius(dp(16)); card.setBackground(bg);
+        TextView title = new TextView(this); title.setText(label); title.setTypeface(null,1); card.addView(title);
+        TextView prov = new TextView(this); prov.setText((candidate.provider.isEmpty()?"غير محدد":candidate.provider) + (candidate.status.isEmpty()?"":" • "+candidate.status)); prov.setTextSize(11); prov.setAlpha(.72f); card.addView(prov);
+        if (!candidate.available) { card.addView(createBubble(candidate.status.isEmpty()?"غير متاح":candidate.status,false)); parent.addView(card); return; }
+        card.addView(createBubble(candidate.answer,false));
+        if (!candidate.sources.isEmpty()) { TextView s=new TextView(this); StringBuilder x=new StringBuilder("المصادر"); int i=1; for(SearchResult r:candidate.sources){x.append("\n[").append(i++).append("] ").append(r.title.isEmpty()?r.host:r.title); if(!r.url.isEmpty())x.append("\n").append(r.url);} s.setText(x.toString()); s.setTextSize(12); s.setAutoLinkMask(Linkify.WEB_URLS); s.setMovementMethod(LinkMovementMethod.getInstance()); card.addView(s); }
+        LinearLayout actions=new LinearLayout(this); Button choose=smallButton("اختر هذا الجواب"), copy=smallButton("نسخ"); chooseButtons.add(choose);
+        choose.setOnClickListener(v -> { if(decisionBusy[0]||state.isFinalized())return; decisionBusy[0]=true; setButtonsEnabled(chooseButtons,false); executor.execute(()->{try{userDecisionService.select(set,candidate.id); runOnUiThread(()->{decisionBusy[0]=false; state.select(candidate.id); selected.setText("✓ اختيارك محفوظ كذاكرة معتمدة: "+label); lastAssistantAnswer=candidate.answer;});}catch(Exception e){runOnUiThread(()->{decisionBusy[0]=false;setButtonsEnabled(chooseButtons,true);selected.setText("فشل الحفظ: "+safeMessage(e));});}});});
+        copy.setOnClickListener(v -> copyText(candidate.answer)); actions.addView(choose); actions.addView(copy); card.addView(actions); parent.addView(card);
     }
 
-    private void handleCandidateSelection(
-            CandidateSet set,
-            AnswerCandidate candidate,
-            String label,
-            CandidateSelectionState state,
-            List<Button> chooseButtons,
-            TextView selectedStatus,
-            boolean[] decisionBusy) {
-
-        if (!candidate.available || state.isFinalized() || decisionBusy[0]) return;
-
-        decisionBusy[0] = true;
-        setButtonsEnabled(chooseButtons, false);
-        status.setText("يحفظ اختيارك…");
-
-        executor.execute(() -> {
-            try {
-                UserDecisionService.Result decision =
-                        userDecisionService.select(set, candidate.id);
-
-                String savedPath =
-                        saveRequestedTextSilently(set.question, candidate.answer);
-
-                runOnUiThread(() -> {
-                    decisionBusy[0] = false;
-                    if (!state.select(candidate.id)) {
-                        status.setText("تم الحفظ لكن حالة الواجهة تغيّرت");
-                        return;
-                    }
-                    selectedStatus.setText(
-                            decision.hasFreshEvidenceConflict()
-                                    ? "⚠ اختيارك محفوظ، لكنه يختلف عن أدلة حديثة"
-                                    : "✓ اختيارك محفوظ كذاكرة معتمدة: " + label);
-                    lastAssistantAnswer = candidate.answer;
-                    status.setText(savedPath.isEmpty()
-                            ? "تم حفظ اختيارك كذاكرة معتمدة من المستخدم"
-                            : "تم حفظ اختيارك • 💾 " + savedPath);
-                    scrollToBottom();
-                });
-            } catch (Exception ex) {
-                runOnUiThread(() -> {
-                    decisionBusy[0] = false;
-                    if (!state.isFinalized()) {
-                        setButtonsEnabled(chooseButtons, true);
-                    }
-                    status.setText("فشل حفظ الاختيار: " + safeMessage(ex));
-                });
-            }
-        });
+    private void showCorrection(CandidateSet set,CandidateSelectionState state,List<Button> buttons,TextView selected,boolean[] decisionBusy) {
+        EditText input=new EditText(this); input.setHint("اكتب الجواب الصحيح"); input.setMinLines(3);
+        new AlertDialog.Builder(this).setTitle("تصحيح الإجابة").setView(input).setNegativeButton("إلغاء",null).setPositiveButton("حفظ",(d,w)->{String a=input.getText().toString().trim();if(a.isEmpty()||decisionBusy[0])return;decisionBusy[0]=true;executor.execute(()->{try{userDecisionService.correct(set,a);runOnUiThread(()->{decisionBusy[0]=false;state.correct(a);selected.setText("✓ تصحيحك محفوظ كذاكرة معتمدة");lastAssistantAnswer=a;});}catch(Exception e){runOnUiThread(()->selected.setText("فشل التصحيح: "+safeMessage(e)));}});}).show();
     }
 
-    private void showComparisonCorrectionDialog(
-            CandidateSet set,
-            CandidateSelectionState state,
-            List<Button> chooseButtons,
-            TextView selectedStatus,
-            boolean[] decisionBusy) {
-
-        EditText correction = new EditText(this);
-        correction.setHint("اكتب الجواب الصحيح");
-        correction.setMinLines(3);
-        correction.setMaxLines(10);
-        correction.setPadding(dp(16), dp(12), dp(16), dp(12));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("اكتب تصحيحك")
-                .setView(correction)
-                .setNegativeButton("إلغاء", null)
-                .setPositiveButton("حفظ التصحيح", null)
-                .create();
-
-        dialog.setOnShowListener(ignored ->
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                    String better = correction.getText().toString().trim();
-                    if (better.isEmpty() || decisionBusy[0]) return;
-
-                    decisionBusy[0] = true;
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
-                    setButtonsEnabled(chooseButtons, false);
-                    status.setText("يحفظ تصحيحك…");
-
-                    executor.execute(() -> {
-                        try {
-                            UserDecisionService.Result decision =
-                                    userDecisionService.correct(set, better);
-
-                            String savedPath =
-                                    saveRequestedTextSilently(set.question, better);
-
-                            runOnUiThread(() -> {
-                                decisionBusy[0] = false;
-                                state.correct(better);
-                                selectedStatus.setText(
-                                        decision.hasFreshEvidenceConflict()
-                                                ? "⚠ تصحيحك محفوظ، لكنه يختلف عن أدلة حديثة"
-                                                : "✓ تصحيحك محفوظ كذاكرة معتمدة");
-                                lastAssistantAnswer = better;
-                                status.setText(savedPath.isEmpty()
-                                        ? "تم حفظ تصحيحك في buffer التعلم"
-                                        : "تم حفظ تصحيحك • 💾 " + savedPath);
-                                dialog.dismiss();
-                                scrollToBottom();
-                            });
-                        } catch (Exception ex) {
-                            runOnUiThread(() -> {
-                                decisionBusy[0] = false;
-                                dialog.getButton(
-                                        AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                                if (!state.isFinalized()) {
-                                    setButtonsEnabled(chooseButtons, true);
-                                }
-                                Toast.makeText(
-                                        this,
-                                        "فشل التصحيح: " + safeMessage(ex),
-                                        Toast.LENGTH_LONG
-                                ).show();
-                            });
-                        }
-                    });
-                }));
-
-        dialog.show();
-    }
-
-    private void setButtonsEnabled(List<Button> buttons, boolean enabled) {
-        for (Button button : buttons) button.setEnabled(enabled);
-    }
-
-    private AnswerCandidate firstAvailable(CandidateSet set) {
-        for (AnswerCandidate candidate : set.all()) {
-            if (candidate.available) return candidate;
-        }
-        return null;
-    }
-
-    private void copyText(String text) {
-        ClipboardManager clipboard =
-                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        clipboard.setPrimaryClip(ClipData.newPlainText("H33 answer", text));
-        Toast.makeText(this, "تم النسخ", Toast.LENGTH_SHORT).show();
-    }
-
-    private String saveRequestedTextSilently(String question, String answer) {
-        if (!TextFileTool.wantsTextFile(question)) return "";
-        try {
-            return TextFileTool.save(
-                    this,
-                    TextFileTool.suggestedFileName(question),
-                    answer
-            );
-        } catch (Exception ignored) {
-            return "";
-        }
-    }
-
-    private void stopGeneration() {
-        if (!busy || engine == null) return;
-        if (localInference != null) localInference.cancel();
-        else engine.cancelGeneration();
-        status.setText("جارٍ إيقاف التوليد…");
-        stopButton.setEnabled(false);
-    }
-
-    private void startNewChat() {
-        generationId++;
-        if (localInference != null) localInference.cancel();
-        else if (engine != null) engine.cancelGeneration();
-
-        messagesContainer.removeAllViews();
-        addWelcomeMessage();
-        inputBox.setText("");
-        lastAssistantAnswer = "";
-        setBusy(engine == null, engine == null ? "النموذج غير جاهز" : "محادثة جديدة");
-
-        if (engine != null) {
-            executor.execute(() -> {
-                try {
-                    engine.newConversation();
-                    int choices = preferenceStore == null ? 0 : preferenceStore.eventCount();
-                    runOnUiThread(() ->
-                            setBusy(false, "جاهز • DeepSeek Python • ذاكرة مستخدم: "
-                                    + choices));
-                } catch (Exception ex) {
-                    runOnUiThread(() ->
-                            status.setText("تعذر بدء محادثة جديدة: " + safeMessage(ex)));
-                }
-            });
-        }
-    }
-
-    private void renderConversation(List<CodeModelEngine.ChatTurn> turns) {
-        for (CodeModelEngine.ChatTurn turn : turns) {
-            if ("user".equals(turn.role)) {
-                addUserBubble(turn.content);
-            } else if ("assistant".equals(turn.role)) {
-                LinearLayout block = new LinearLayout(this);
-                block.setOrientation(LinearLayout.VERTICAL);
-                block.setGravity(Gravity.START);
-                block.setPadding(dp(2), dp(4), dp(2), dp(8));
-
-                TextView bubble = createBubble(turn.content, false);
-                block.addView(bubble);
-                addUtilityActions(block, turn.content);
-
-                lastAssistantAnswer = turn.content;
-                messagesContainer.addView(block);
-            }
-        }
-
-        scrollToBottom();
-    }
-
-    private void addUserBubble(String text) {
-        LinearLayout wrapper = new LinearLayout(this);
-        wrapper.setOrientation(LinearLayout.VERTICAL);
-        wrapper.setGravity(Gravity.END);
-        wrapper.setPadding(dp(2), dp(4), dp(2), dp(6));
-        wrapper.addView(createBubble(text, true));
-        messagesContainer.addView(wrapper);
-    }
-
-    private TextView createBubble(String text, boolean user) {
-        TextView bubble = new TextView(this);
-        bubble.setText(text);
-        bubble.setTextSize(17f);
-        bubble.setTextIsSelectable(true);
-        bubble.setPadding(dp(14), dp(10), dp(14), dp(10));
-        bubble.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.88f));
-
-        boolean night = (getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-
-        int background;
-        int foreground;
-
-        if (user) {
-            background = night ? Color.rgb(92, 64, 165) : Color.rgb(232, 224, 255);
-            foreground = night ? Color.WHITE : Color.rgb(35, 20, 70);
-        } else {
-            background = night ? Color.rgb(38, 38, 38) : Color.rgb(245, 245, 245);
-            foreground = night ? Color.rgb(245, 245, 245) : Color.rgb(25, 25, 25);
-        }
-
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(background);
-        drawable.setCornerRadius(dp(18));
-        bubble.setBackground(drawable);
-        bubble.setTextColor(foreground);
-
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        bubble.setLayoutParams(lp);
-        return bubble;
-    }
-
-    private void addUtilityActions(LinearLayout block, String answer) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.START);
-        row.setPadding(dp(4), dp(4), dp(4), 0);
-
-        Button copy = smallButton("نسخ");
-        Button txt = smallButton("TXT");
-
-        copy.setOnClickListener(v -> copyText(answer));
-        txt.setOnClickListener(v ->
-                saveTextFile("H33_" + System.currentTimeMillis() + ".txt", answer));
-
-        row.addView(copy);
-        row.addView(txt);
-        block.addView(row);
-    }
-
-    private void showGoogleInteractionDialog(String question) {
-        final WebView webView = new WebView(this);
-        GoogleAiOverviewProvider.configureSearchWebView(webView, this);
-
-        TextView help = new TextView(this);
-        help.setText("هذه صفحة Google داخل H33. وافق أو أكمل التحقق يدويًا، "
-                + "ثم أغلق النافذة وأعد السؤال.");
-        help.setPadding(dp(12), dp(10), dp(12), dp(10));
-        help.setTextSize(13f);
-
-        LinearLayout container = new LinearLayout(this);
-        container.setOrientation(LinearLayout.VERTICAL);
-        container.addView(help, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-        container.addView(webView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(520)));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("إعداد Google داخل H33")
-                .setView(container)
-                .setNegativeButton("إغلاق", null)
-                .create();
-
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(
-                    WebView view, WebResourceRequest request) {
-                Uri target = request == null ? null : request.getUrl();
-                String host = target == null ? "" : target.getHost();
-                return !GoogleAiOverviewProvider.isAllowedGoogleHost(host);
-            }
-
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                if (GoogleAiOverviewProvider.isConsentPage(url)) {
-                    help.setText("Google يطلب موافقتك. أكملها يدويًا هنا.");
-                } else if (GoogleAiOverviewProvider.isChallengePage(url)) {
-                    help.setText("Google يطلب تحققًا بشريًا. أكمله يدويًا هنا.");
-                } else {
-                    help.setText("صفحة Google جاهزة. أغلق النافذة وأعد السؤال "
-                            + "ليحاول H33 استخراج AI Overview.");
-                }
-            }
-        });
-
-        dialog.setOnDismissListener(ignored -> {
-            try {
-                CookieManager.getInstance().flush();
-                webView.stopLoading();
-                webView.setWebViewClient(null);
-                webView.loadUrl("about:blank");
-                webView.removeAllViews();
-                webView.destroy();
-            } catch (Exception ignoredCleanup) {
-            }
-        });
-
-        dialog.setOnShowListener(ignored -> {
-            String url = GoogleAiOverviewProvider.buildSearchUrl(
-                    question, "ar", "GB");
-            webView.loadUrl(url);
-        });
-
-        dialog.show();
-    }
-
-    private void exportPreferenceDatasets() {
-        if (preferenceStore == null) {
-            Toast.makeText(this, "بيانات التعلم غير جاهزة", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        status.setText("🧠 يجهز بيانات التعلم…");
-        executor.execute(() -> {
-            try {
-                List<PreferenceRecord> latest = preferenceStore.latestDecisions();
-                if (latest.isEmpty()) {
-                    runOnUiThread(() ->
-                            status.setText("لا توجد اختيارات أو تصحيحات للتصدير"));
-                    return;
-                }
-
-                PreferenceDatasetExporter exporter =
-                        new PreferenceDatasetExporter();
-                String sft = exporter.toSftJsonl(latest);
-                String dpo = exporter.toPreferenceJsonl(latest);
-
-                long stamp = System.currentTimeMillis();
-                String sftPath = TextFileTool.save(
-                        this, "H33_SFT_" + stamp + ".jsonl", sft);
-                String dpoPath = TextFileTool.save(
-                        this, "H33_DPO_" + stamp + ".jsonl", dpo);
-
-                runOnUiThread(() -> {
-                    status.setText("🧠 تم تصدير بيانات التعلم");
-                    Toast.makeText(
-                            this,
-                            "SFT: " + sftPath + "\nDPO: " + dpoPath,
-                            Toast.LENGTH_LONG
-                    ).show();
-                });
-            } catch (Exception ex) {
-                runOnUiThread(() ->
-                        status.setText("فشل تصدير بيانات التعلم: " +
-                                safeMessage(ex)));
-            }
-        });
-    }
-
-    private void saveTextFile(String fileName, String content) {
-        status.setText("💾 يحفظ الملف…");
-        executor.execute(() -> {
-            try {
-                String path = TextFileTool.save(this, fileName, content);
-                runOnUiThread(() -> {
-                    status.setText("💾 تم الحفظ: " + path);
-                    Toast.makeText(this, "تم إنشاء الملف النصي", Toast.LENGTH_LONG).show();
-                });
-            } catch (Exception ex) {
-                runOnUiThread(() ->
-                        status.setText("فشل إنشاء الملف: " + safeMessage(ex)));
-            }
-        });
-    }
-
-    private Button smallButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextSize(12f);
-        b.setAllCaps(false);
-        b.setMinWidth(0);
-        b.setMinHeight(0);
-        b.setPadding(dp(8), dp(2), dp(8), dp(2));
-
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, dp(40)
-        );
-        lp.setMarginEnd(dp(4));
-        b.setLayoutParams(lp);
-        return b;
-    }
-
-    private void addWelcomeMessage() {
-        LinearLayout wrapper = new LinearLayout(this);
-        wrapper.setOrientation(LinearLayout.VERTICAL);
-        wrapper.setGravity(Gravity.CENTER_HORIZONTAL);
-        wrapper.setPadding(dp(20), dp(28), dp(20), dp(18));
-
-        TextView title = new TextView(this);
-        title.setText("H33 DeepSeek Coder");
-        title.setTextSize(25f);
-        title.setTextAlignment(TextView.TEXT_ALIGNMENT_CENTER);
-        title.setGravity(Gravity.CENTER);
-
-        TextView subtitle = new TextView(this);
-        subtitle.setText("DeepSeek-Coder 1.3B • Python • Web Evidence • Google");
-        subtitle.setTextSize(14f);
-        subtitle.setAlpha(0.75f);
-        subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, dp(8), 0, 0);
-
-        wrapper.addView(title);
-        wrapper.addView(subtitle);
-        messagesContainer.addView(wrapper);
-    }
-
-    private void setBusy(boolean isBusy, String message) {
-        busy = isBusy;
-        status.setText(message);
-
-        sendButton.setEnabled(!isBusy && engine != null);
-        inputBox.setEnabled(!isBusy && engine != null);
-
-        stopButton.setVisibility(isBusy && engine != null ? View.VISIBLE : View.GONE);
-        stopButton.setEnabled(isBusy && engine != null);
-
-        newChatButton.setEnabled(true);
-        plusButton.setEnabled(true);
-    }
-
-    private void scrollToBottom() {
-        chatScroll.post(() -> chatScroll.fullScroll(ScrollView.FOCUS_DOWN));
-    }
-
-    private int dp(int value) {
-        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
-    }
-
-    private static String safeMessage(Throwable t) {
-        if (t == null) return "خطأ غير معروف";
-        String m = t.getMessage();
-        return (m == null || m.trim().isEmpty()) ? t.getClass().getSimpleName() : m;
-    }
-
-    @Override
-    protected void onDestroy() {
-        generationId++;
-        if (localInference != null) localInference.cancel();
-        else if (engine != null) engine.cancelGeneration();
-
-        executor.shutdownNow();
-
-        if (engine != null) {
-            try {
-                engine.close();
-            } catch (Exception ignored) {
-            }
-        }
-
-        super.onDestroy();
-    }
+    private void setButtonsEnabled(List<Button> bs,boolean enabled){for(Button b:bs)b.setEnabled(enabled);}
+    private void copyText(String text){ClipboardManager cm=(ClipboardManager)getSystemService(Context.CLIPBOARD_SERVICE);cm.setPrimaryClip(ClipData.newPlainText("H33",text));Toast.makeText(this,"تم النسخ",Toast.LENGTH_SHORT).show();}
+    private void stopGeneration(){if(localInference!=null)localInference.cancel();generationId++;setBusy(false,"تم إيقاف التوليد");}
+    private void startNewChat(){generationId++;if(localInference!=null)localInference.cancel();messagesContainer.removeAllViews();addWelcomeMessage();inputBox.setText("");if(engine!=null)executor.execute(()->{try{engine.newConversation();}catch(Exception ignored){}});}
+    private void renderConversation(List<CodeModelEngine.ChatTurn> turns){for(CodeModelEngine.ChatTurn t:turns){if("user".equals(t.role))addUserBubble(t.content);else{messagesContainer.addView(createBubble(t.content,false));lastAssistantAnswer=t.content;}}scrollToBottom();}
+    private void addUserBubble(String text){LinearLayout w=new LinearLayout(this);w.setGravity(Gravity.END);w.addView(createBubble(text,true));messagesContainer.addView(w);}
+    private TextView createBubble(String text,boolean user){TextView b=new TextView(this);b.setText(text);b.setTextSize(16);b.setTextIsSelectable(true);b.setPadding(dp(14),dp(10),dp(14),dp(10));GradientDrawable d=new GradientDrawable();d.setColor(user?Color.rgb(92,64,165):Color.rgb(38,38,38));d.setCornerRadius(dp(18));b.setBackground(d);b.setTextColor(Color.WHITE);return b;}
+    private Button smallButton(String text){Button b=new Button(this);b.setText(text);b.setTextSize(12);b.setAllCaps(false);b.setMinWidth(0);b.setMinHeight(0);return b;}
+    private void addWelcomeMessage(){LinearLayout w=new LinearLayout(this);w.setOrientation(LinearLayout.VERTICAL);w.setGravity(Gravity.CENTER_HORIZONTAL);w.setPadding(dp(20),dp(28),dp(20),dp(18));TextView t=new TextView(this);t.setText("H33 DeepSeek Coder");t.setTextSize(25);TextView s=new TextView(this);s.setText("DeepSeek-Coder 1.3B • Python • Web Evidence • Google");s.setAlpha(.75f);w.addView(t);w.addView(s);messagesContainer.addView(w);}
+    private void setBusy(boolean value,String message){busy=value;status.setText(message);sendButton.setEnabled(!value&&engine!=null);inputBox.setEnabled(!value&&engine!=null);stopButton.setVisibility(value&&engine!=null?View.VISIBLE:View.GONE);plusButton.setEnabled(true);newChatButton.setEnabled(true);}
+    private void scrollToBottom(){chatScroll.post(()->chatScroll.fullScroll(ScrollView.FOCUS_DOWN));}
+    private int dp(int v){return (int)(v*getResources().getDisplayMetrics().density+.5f);}
+    private static String safeMessage(Throwable t){String m=t==null?null:t.getMessage();return m==null||m.trim().isEmpty()?t.getClass().getSimpleName():m;}
+    @Override protected void onDestroy(){generationId++;if(localInference!=null)localInference.cancel();executor.shutdownNow();if(engine!=null)engine.close();super.onDestroy();}
 }
