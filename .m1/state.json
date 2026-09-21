@@ -1,0 +1,23 @@
+{
+  "protocol": "M1",
+  "project": "H33",
+  "branch": "h33-deepseek-lite",
+  "status": "debugging",
+  "objective": "Make the offline DeepSeek-Coder Android app answer reliably on Samsung A16 4GB and preserve a stable signing identity so future code-only updates stay small.",
+  "last_checkpoint": {
+    "commit": "e20111c129848e78da4aa0c56507f199791b8dfe",
+    "workflow_run": 35557459586,
+    "evidence": [
+      "Previous artifact was ~893.7MB because quantize command still used Q4_K_M despite q3 filename.",
+      "Signing cache did not persist ~/.android/debug.keystore; deterministic H33 signing key generation was added.",
+      "ARM64 KleidiAI + OpenMP enabled.",
+      "CI smoke test now blocks artifact upload unless the GGUF produces text for prompt Hi."
+    ],
+    "next": "Wait only for evidence from workflow smoke test; if model smoke test passes, isolate Android/JNI runtime next. If it fails, fix model/runtime before APK packaging."
+  },
+  "policy": {
+    "autonomous_safe_reversible": true,
+    "pause_only_for": "authorization, sensitive, irreversible, or high-impact action",
+    "no_success_claim_without_runtime_evidence": true
+  }
+}
