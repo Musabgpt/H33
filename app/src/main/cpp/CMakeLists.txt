@@ -5,8 +5,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# llama.cpp is fetched by the CI build into third_party/llama.cpp.
-set(LLAMA_SRC "${CMAKE_CURRENT_LIST_DIR}/../../../../../../third_party/llama.cpp")
+# llama.cpp is fetched by CI into <repo>/third_party/llama.cpp.
+set(LLAMA_SRC "${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/llama.cpp")
 if(NOT EXISTS "${LLAMA_SRC}/CMakeLists.txt")
     message(FATAL_ERROR "Pinned llama.cpp source is missing: ${LLAMA_SRC}")
 endif()
