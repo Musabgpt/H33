@@ -48,8 +48,6 @@ Java_com_musab_aragpt2_LlamaNative_open(JNIEnv * env, jclass, jstring path,
     release_all();
     llama_backend_init();
     llama_model_params mp = llama_model_default_params();
-    mp.use_mmap = true;
-    mp.use_mlock = false;
     std::string model_path = from_jstring(env, path);
     g_model = llama_model_load_from_file(model_path.c_str(), mp);
     if (!g_model) return js(env, "تعذر فتح نموذج GGUF");

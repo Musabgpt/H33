@@ -57,6 +57,9 @@ jobs:
           git clone https://github.com/ggml-org/llama.cpp.git app/src/main/cpp/llama.cpp
           git -C app/src/main/cpp/llama.cpp checkout ce8caa6e60a03093351d6016a818720e0d46f0fb
 
+      - name: Compile Android runtime before model conversion
+        run: gradle :app:externalNativeBuildDebug :app:compileDebugJavaWithJavac --stacktrace
+
       - name: Set up Python
         if: ${{ github.event_name == 'push' || inputs.bundle_model }}
         uses: actions/setup-python@v5
