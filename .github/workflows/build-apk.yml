@@ -35,7 +35,7 @@ jobs:
 
       # Cache is repository-scoped. This full build establishes the identity;
       # subsequent small APKs restore it and Android accepts them as updates.
-      - name: Restore stable signing identity
+      - name: Restore stable H33 signing identity
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
@@ -86,15 +86,15 @@ jobs:
           cmake --build /tmp/llama-host --target llama-quantize --parallel 2
           mkdir -p app/src/main/assets/model
           /tmp/llama-host/bin/llama-quantize /tmp/deepseek-f16.gguf \
-            app/src/main/assets/model/deepseek-coder-1.3b-q4_k_m.gguf Q4_K_M
+            app/src/main/assets/model/deepseek-coder-1.3b-q3_k_s.gguf Q4_K_M
 
       - name: Validate full model
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
         run: |
-          MODEL=app/src/main/assets/model/deepseek-coder-1.3b-q4_k_m.gguf
+          MODEL=app/src/main/assets/model/deepseek-coder-1.3b-q3_k_s.gguf
           test -s "$MODEL"
           test "$(head -c4 "$MODEL")" = "GGUF"
-          test "$(stat -c%s "$MODEL")" -gt 450000000
+          test "$(stat -c%s "$MODEL")" -gt 350000000
           du -h "$MODEL"
 
       - name: Prepare model-free update
