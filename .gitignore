@@ -8,3 +8,5 @@ app/src/main/assets/vocab.json
 app/src/main/assets/merges.txt
 app/src/main/assets/tokenizer_config.json
 app/src/main/assets/special_tokens_map.json
+app/src/main/assets/model/*.gguf
+app/src/main/cpp/llama.cpp/

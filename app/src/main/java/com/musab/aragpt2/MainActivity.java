@@ -12,6 +12,10 @@ import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.*;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -24,7 +28,7 @@ public final class MainActivity extends AppCompatActivity {
     private ToolRegistry tools;
     private TextView status;
     private ScrollView scroll;
-    private LinearLayout messages;
+    private LinearLayout messages, root, composer;
     private EditText input;
     private Button send, stop, newChat, toolsButton;
     private volatile long generationId;
@@ -33,7 +37,10 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
+        root = findViewById(R.id.rootLayout);
+        composer = findViewById(R.id.composerBar);
         status = findViewById(R.id.status);
         scroll = findViewById(R.id.chatScroll);
         messages = findViewById(R.id.messagesContainer);
@@ -42,6 +49,8 @@ public final class MainActivity extends AppCompatActivity {
         stop = findViewById(R.id.stopButton);
         newChat = findViewById(R.id.newChatButton);
         toolsButton = findViewById(R.id.plusButton);
+        styleInterface();
+        installInsets();
         tools = ToolRegistry.withBuiltIns(this);
         welcome();
         setBusy(true, "جاري تشغيل DeepSeek-Coder 1.3B…");
@@ -76,7 +85,7 @@ public final class MainActivity extends AppCompatActivity {
         setBusy(true, "DeepSeek يفكر محليًا…");
         worker.execute(() -> {
             try {
-                String answer = engine.generateCandidate(question, 384, text -> {
+                String answer = engine.generateCandidate(question, 160, text -> {
                     long now = SystemClock.uptimeMillis();
                     if (id != generationId || now - paint[0] < 40) return;
                     paint[0] = now;
@@ -143,8 +152,9 @@ public final class MainActivity extends AppCompatActivity {
         view.setPadding(dp(14), dp(11), dp(14), dp(11));
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(18));
-        bg.setColor(user ? Color.rgb(224,231,255) : Color.rgb(246,247,250));
+        bg.setColor(user ? Color.rgb(35, 91, 184) : Color.rgb(34, 39, 49));
         view.setBackground(bg);
+        view.setTextColor(Color.WHITE);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.gravity = user ? Gravity.END : Gravity.START;
         lp.setMargins(0, dp(5), 0, dp(5));
@@ -155,6 +165,32 @@ public final class MainActivity extends AppCompatActivity {
         busy = value; status.setText(message);
         send.setEnabled(!value && engine != null); input.setEnabled(!value);
         stop.setVisibility(value && engine != null ? View.VISIBLE : View.GONE);
+    }
+    private void styleInterface() {
+        root.setBackgroundColor(Color.rgb(15, 18, 25));
+        status.setTextColor(Color.rgb(170, 181, 199));
+        input.setTextColor(Color.WHITE);
+        input.setHintTextColor(Color.rgb(145, 154, 170));
+        GradientDrawable bar = new GradientDrawable();
+        bar.setColor(Color.rgb(31, 36, 47)); bar.setCornerRadius(dp(26));
+        bar.setStroke(dp(1), Color.rgb(57, 66, 83)); composer.setBackground(bar);
+        styleCircle(send, Color.rgb(47, 111, 237));
+        styleCircle(stop, Color.rgb(109, 49, 58));
+        styleCircle(toolsButton, Color.rgb(48, 55, 69));
+    }
+    private void styleCircle(Button button, int color) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setShape(GradientDrawable.OVAL); shape.setColor(color);
+        button.setBackground(shape); button.setTextColor(Color.WHITE);
+    }
+    private void installInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(root, (view, windowInsets) -> {
+            Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime());
+            root.setPadding(dp(12) + bars.left, dp(10) + bars.top,
+                    dp(12) + bars.right, Math.max(bars.bottom, ime.bottom) + dp(8));
+            return windowInsets;
+        });
     }
     private void down() { scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN)); }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }

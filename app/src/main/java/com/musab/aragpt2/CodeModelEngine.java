@@ -2,432 +2,159 @@ package com.musab.aragpt2;
 
 import android.content.Context;
 import android.content.res.AssetManager;
+import android.os.StatFs;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import ai.onnxruntime.genai.Generator;
-import ai.onnxruntime.genai.GeneratorParams;
-import ai.onnxruntime.genai.Model;
-import ai.onnxruntime.genai.Sequences;
-import ai.onnxruntime.genai.Tokenizer;
-import ai.onnxruntime.genai.TokenizerStream;
-
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/** DeepSeek Coder GGUF engine tuned for 4 GB Android devices. */
 public final class CodeModelEngine implements AutoCloseable {
     public interface StreamListener { void onUpdate(String text); }
-    public static final class ChatTurn {
-        public final String turnId;
-        public final String role;
-        public final String content;
 
-        ChatTurn(String turnId, String role, String content) {
-            this.turnId = turnId == null ? "" : turnId;
-            this.role = role == null ? "" : role;
-            this.content = content == null ? "" : content;
+    public static final class ChatTurn {
+        public final String turnId, role, content;
+        ChatTurn(String id, String role, String content) {
+            this.turnId = safe(id); this.role = safe(role); this.content = safe(content);
         }
     }
 
-    private static final String MODEL_ASSET_DIR = "model";
-    private static final String MODEL_LOCAL_DIR = "deepseek_coder_1_3b_int4";
+    private static final String MODEL_ASSET = "model/deepseek-coder-1.3b-q4_k_m.gguf";
+    private static final String MODEL_FILE = "deepseek-coder-1.3b-q4_k_m.gguf";
     private static final String CHAT_FILE = "current_chat.jsonl";
-    private static final int MAX_HISTORY_MESSAGES = 8;
-    private static final int MAX_PROMPT_TOKENS = 2600;
-    private static final String SYSTEM_PROMPT =
-            "You are H33 Python Coder, a local programming assistant. " +
-            "Answer Python programming questions only. " +
-            "Prefer correct, runnable Python 3 code with concise explanations. " +
-            "Do not invent package APIs. If the request is not about Python programming, " +
-            "say that the local Python model is not intended for that task. " +
-            "Reply in the same language as the user. Never claim web access.";
+    private static final int MAX_HISTORY_MESSAGES = 4;
+    private static final int MAX_PROMPT_CHARS = 7000;
+    private static final long MIN_MODEL_BYTES = 450L * 1024L * 1024L;
     private static final Pattern TOOL_CALL = Pattern.compile(
             "<tool_call\\s+name=\\\"([a-zA-Z0-9_.-]{1,48})\\\">([\\s\\S]*?)</tool_call>");
+    private static final String SYSTEM =
+            "You are H33 DeepSeek Coder, an offline Python programming assistant. " +
+            "Write correct runnable Python 3. Reply in the user's language. " +
+            "Be concise. Never claim internet access.";
 
     private final Context context;
-    private final Model model;
-    private final Tokenizer tokenizer;
-    private final File chatFile;
-    private final ConversationFileStore chatStore;
     private final ToolRegistry tools;
-    private final String chatTemplate;
-    private final ConversationHistory conversation =
-            new ConversationHistory(MAX_HISTORY_MESSAGES);
-
-    private volatile boolean cancelRequested = false;
+    private final ConversationHistory conversation = new ConversationHistory(MAX_HISTORY_MESSAGES);
+    private final ConversationFileStore store;
+    private boolean closed;
 
     public CodeModelEngine(Context context, ToolRegistry tools) throws Exception {
         this.context = context.getApplicationContext();
         this.tools = tools == null ? new ToolRegistry() : tools;
-        this.chatFile = new File(this.context.getFilesDir(), CHAT_FILE);
-        this.chatStore = new ConversationFileStore(this.chatFile);
+        this.store = new ConversationFileStore(new File(this.context.getFilesDir(), CHAT_FILE));
+        conversation.replaceAll(store.load());
 
-        File modelDir = new File(this.context.getFilesDir(), MODEL_LOCAL_DIR);
-        prepareModelDirectory(this.context.getAssets(), MODEL_ASSET_DIR, modelDir);
-
-        this.model = new Model(modelDir.getAbsolutePath());
-        this.tokenizer = new Tokenizer(model);
-        this.chatTemplate = readTextAsset(
-                this.context.getAssets(),
-                "model/chat_template.jinja",
-                ""
-        );
-        loadConversation();
+        File model = prepareModelFile();
+        LlamaNative.load();
+        String error = LlamaNative.open(model.getAbsolutePath(), 512, 2);
+        if (error != null && !error.isEmpty()) throw new IllegalStateException(error);
     }
 
-    public String generateCandidate(
-            String question,
-            int maxNewTokens,
+    public String generateCandidate(String question, int maxNewTokens,
             StreamListener listener) throws Exception {
-        String q = clean(question);
+        ensureOpen();
+        String q = safe(question).trim();
         if (q.isEmpty()) return "";
+        String answer = LlamaNative.generate(buildPrompt(q), Math.min(160, Math.max(16, maxNewTokens)));
+        if (answer == null) answer = "";
+        answer = cleanup(answer);
+        if (listener != null && !answer.isEmpty()) listener.onUpdate(answer);
 
-        cancelRequested = false;
-        List<ChatTurn> snapshot = getConversationSnapshot();
-        StringBuilder raw = new StringBuilder();
-
-        try (Sequences encoded = encodeTrimmedPrompt(snapshot, q)) {
-            int[] inputIds = encoded.getSequence(0);
-            int totalMaxLength =
-                    Math.min(4096, inputIds.length + Math.max(16, maxNewTokens));
-
-            try (GeneratorParams params = new GeneratorParams(model)) {
-                params.setSearchOption("max_length", (double) totalMaxLength);
-                params.setSearchOption("do_sample", false);
-                params.setSearchOption("top_k", 50.0);
-                params.setSearchOption("top_p", 0.95);
-                params.setSearchOption("repetition_penalty", 1.08);
-
-                try (Generator generator = new Generator(model, params);
-                     TokenizerStream stream = tokenizer.createStream()) {
-                    generator.appendTokenSequences(encoded);
-
-                    while (!generator.isDone() && !cancelRequested) {
-                        generator.generateNextToken();
-                        int token = generator.getLastTokenInSequence(0);
-                        raw.append(stream.decode(token));
-
-                        String visible = cleanup(raw.toString());
-                        if (listener != null && !visible.isEmpty()) {
-                            listener.onUpdate(visible);
-                        }
-
-                        if (containsStopMarker(raw)) break;
-                    }
-                }
-            }
-        }
-
-        String first = cleanup(raw.toString());
-        Matcher call = TOOL_CALL.matcher(first);
-        if (!call.find()) return first;
+        Matcher call = TOOL_CALL.matcher(answer);
+        if (!call.find()) return answer;
         LocalTool tool = tools.get(call.group(1));
-        if (tool == null) return first;
+        if (tool == null) return answer;
         String result;
         try { result = tool.execute(call.group(2).trim()); }
-        catch (Exception error) { result = "Tool error: " + error.getMessage(); }
-        return generateAfterTool(snapshot, q, call.group(1), result, maxNewTokens, listener);
+        catch (Exception e) { result = "Tool error: " + e.getMessage(); }
+        String finalAnswer = cleanup(LlamaNative.generate(
+                buildPrompt(q + "\n\nTool " + call.group(1) + " returned:\n" + result
+                        + "\nGive the final answer without tool markup."), 160));
+        if (listener != null && !finalAnswer.isEmpty()) listener.onUpdate(finalAnswer);
+        return finalAnswer;
     }
 
-    public void cancelGeneration() {
-        cancelRequested = true;
+    public void cancelGeneration() { LlamaNative.cancel(); }
+
+    public synchronized void newConversation() throws Exception {
+        conversation.clear(); store.save(conversation.snapshot());
     }
 
-    public void newConversation() throws Exception {
-        cancelRequested = true;
-        conversation.clear();
-        saveConversationLocked();
-    }
-
-    public List<ChatTurn> getConversationSnapshot() {
+    public synchronized List<ChatTurn> getConversationSnapshot() {
         ArrayList<ChatTurn> out = new ArrayList<>();
-        for (ConversationHistory.Turn turn : conversation.snapshot()) {
-            out.add(new ChatTurn(turn.turnId, turn.role, turn.content));
+        for (ConversationHistory.Turn t : conversation.snapshot()) {
+            out.add(new ChatTurn(t.turnId, t.role, t.content));
         }
         return Collections.unmodifiableList(out);
     }
 
-    public void commitCanonicalTurn(String turnId, String question, String answer)
-            throws Exception {
-        String q = clean(question);
-        String a = clean(answer);
-        if (q.isEmpty() || a.isEmpty()) return;
-
-        String id = clean(turnId);
-        if (id.isEmpty()) id = java.util.UUID.randomUUID().toString();
-
-        conversation.appendTurn(id, q, a);
-        saveConversationLocked();
+    public synchronized void commitCanonicalTurn(String id, String q, String a) throws Exception {
+        if (safe(q).trim().isEmpty() || safe(a).trim().isEmpty()) return;
+        conversation.appendTurn(safe(id).isEmpty() ? UUID.randomUUID().toString() : id, q, a);
+        store.save(conversation.snapshot());
     }
 
-    public boolean replaceCanonicalAnswer(String turnId, String answer)
-            throws Exception {
-        boolean replaced = conversation.replaceAnswer(turnId, answer);
-        if (replaced) saveConversationLocked();
-        return replaced;
-    }
-
-    public String getCanonicalAnswer(String turnId) {
-        return conversation.answerForTurn(turnId);
-    }
-
-    public boolean removeCanonicalTurn(String turnId) throws Exception {
-        boolean removed = conversation.removeTurn(turnId);
-        if (removed) saveConversationLocked();
-        return removed;
-    }
-
-    private Sequences encodeTrimmedPrompt(
-            List<ChatTurn> snapshot,
-            String question) throws Exception {
-        ArrayList<ChatTurn> recent = new ArrayList<>(snapshot);
-        while (true) {
-            String prompt = buildPrompt(recent, question);
-            Sequences encoded = tokenizer.encode(prompt);
-            if (encoded.getSequence(0).length <= MAX_PROMPT_TOKENS) {
-                return encoded;
-            }
-            encoded.close();
-
-            if (recent.size() >= 2) {
-                recent.remove(0);
-                recent.remove(0);
-                continue;
-            }
-            return tokenizer.encode(buildPrompt(
-                    Collections.emptyList(), question));
+    private synchronized String buildPrompt(String question) {
+        StringBuilder p = new StringBuilder(SYSTEM).append(tools.promptDescription()).append("\n\n");
+        for (ConversationHistory.Turn t : conversation.snapshot()) {
+            if ("user".equals(t.role)) p.append("### Instruction:\n").append(t.content).append('\n');
+            else if ("assistant".equals(t.role)) p.append("### Response:\n").append(t.content).append("\n<|EOT|>\n");
         }
+        p.append("### Instruction:\n").append(question).append("\n### Response:\n");
+        if (p.length() > MAX_PROMPT_CHARS) return p.substring(p.length() - MAX_PROMPT_CHARS);
+        return p.toString();
     }
 
-    private String buildPrompt(List<ChatTurn> history, String question) {
-        if (!chatTemplate.trim().isEmpty()) {
-            try {
-                JSONArray messages = new JSONArray();
-                addMessage(messages, "system", SYSTEM_PROMPT + tools.promptDescription());
+    private File prepareModelFile() throws Exception {
+        File target = new File(context.getFilesDir(), MODEL_FILE);
+        if (isValidModel(target)) return target; // Small updates reuse the installed model.
 
-                int start = Math.max(0, history.size() - MAX_HISTORY_MESSAGES);
-                for (int i = start; i < history.size(); i++) {
-                    ChatTurn turn = history.get(i);
-                    if (!"user".equals(turn.role)
-                            && !"assistant".equals(turn.role)) {
-                        continue;
-                    }
-                    addMessage(messages, turn.role, turn.content);
-                }
-
-                addMessage(messages, "user", question);
-
-                return tokenizer.applyChatTemplate(
-                        chatTemplate,
-                        messages.toString(),
-                        null,
-                        true
-                );
-            } catch (Exception ignored) {
-                // Fall back to DeepSeek Coder's documented instruction format.
-            }
+        AssetManager assets = context.getAssets();
+        long free = new StatFs(context.getFilesDir().getAbsolutePath()).getAvailableBytes();
+        if (free < 950L * 1024L * 1024L) {
+            throw new IllegalStateException("تحتاج مساحة فارغة تقارب 1GB لتحضير النموذج");
         }
-
-        StringBuilder out = new StringBuilder();
-        out.append(SYSTEM_PROMPT).append(tools.promptDescription()).append("\n\n");
-
-        int start = Math.max(0, history.size() - MAX_HISTORY_MESSAGES);
-        for (int i = start; i < history.size(); i++) {
-            ChatTurn turn = history.get(i);
-            if ("user".equals(turn.role)) {
-                out.append("### Instruction:\n")
-                        .append(turn.content)
-                        .append("\n");
-            } else if ("assistant".equals(turn.role)) {
-                out.append("### Response:\n")
-                        .append(turn.content)
-                        .append("\n<|EOT|>\n");
-            }
+        File temp = new File(context.getFilesDir(), MODEL_FILE + ".part");
+        if (temp.exists() && !temp.delete()) throw new IllegalStateException("تعذر تنظيف ملف النموذج المؤقت");
+        try (InputStream in = assets.open(MODEL_ASSET, AssetManager.ACCESS_STREAMING);
+             FileOutputStream out = new FileOutputStream(temp)) {
+            byte[] buffer = new byte[1024 * 1024];
+            int n;
+            while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+            out.getFD().sync();
+        } catch (Exception e) {
+            temp.delete();
+            throw new IllegalStateException("هذه نسخة تحديث صغيرة ولا يوجد نموذج محفوظ. ثبّت النسخة الكاملة أولًا.", e);
         }
-
-        out.append("### Instruction:\n")
-                .append(question)
-                .append("\n### Response:\n");
-        return out.toString();
+        if (!isValidModel(temp)) { temp.delete(); throw new IllegalStateException("ملف GGUF غير مكتمل"); }
+        if (target.exists()) target.delete();
+        if (!temp.renameTo(target)) throw new IllegalStateException("تعذر تثبيت ملف النموذج");
+        return target;
     }
 
-    private String generateAfterTool(List<ChatTurn> history, String question,
-            String toolName, String toolResult, int maxNewTokens,
-            StreamListener listener) throws Exception {
-        String augmented = question + "\n\nLocal tool " + toolName
-                + " returned:\n" + toolResult + "\nUse it in the final answer.";
-        StringBuilder raw = new StringBuilder();
-        try (Sequences encoded = encodeTrimmedPrompt(history, augmented);
-             GeneratorParams params = new GeneratorParams(model)) {
-            int[] ids = encoded.getSequence(0);
-            params.setSearchOption("max_length", (double)Math.min(4096,
-                    ids.length + Math.max(16, maxNewTokens)));
-            params.setSearchOption("do_sample", false);
-            params.setSearchOption("repetition_penalty", 1.08);
-            try (Generator generator = new Generator(model, params);
-                 TokenizerStream stream = tokenizer.createStream()) {
-                generator.appendTokenSequences(encoded);
-                while (!generator.isDone() && !cancelRequested) {
-                    generator.generateNextToken();
-                    raw.append(stream.decode(generator.getLastTokenInSequence(0)));
-                    String visible = cleanup(raw.toString());
-                    if (listener != null && !visible.isEmpty()) listener.onUpdate(visible);
-                    if (containsStopMarker(raw)) break;
-                }
-            }
-        }
-        return cleanup(raw.toString());
-    }
-
-    private static void addMessage(
-            JSONArray messages,
-            String role,
-            String content) throws Exception {
-        JSONObject obj = new JSONObject();
-        obj.put("role", role);
-        obj.put("content", content == null ? "" : content);
-        messages.put(obj);
-    }
-
-    private void loadConversation() {
-        conversation.replaceAll(chatStore.load());
-    }
-
-    private void saveConversationLocked() throws Exception {
-        chatStore.save(conversation.snapshot());
-    }
-
-    private static boolean containsStopMarker(StringBuilder raw) {
-        String s = raw.toString();
-        return s.contains("<|EOT|>")
-                || s.contains("<｜end▁of▁sentence｜>");
+    private static boolean isValidModel(File file) {
+        if (!file.isFile() || file.length() < MIN_MODEL_BYTES) return false;
+        try (InputStream in = new java.io.FileInputStream(file)) {
+            return in.read() == 'G' && in.read() == 'G' && in.read() == 'U' && in.read() == 'F';
+        } catch (Exception ignored) { return false; }
     }
 
     private static String cleanup(String text) {
-        String out = text == null ? "" : text;
-        int marker = out.indexOf("<|EOT|>");
-        if (marker >= 0) out = out.substring(0, marker);
-        marker = out.indexOf("<｜end▁of▁sentence｜>");
-        if (marker >= 0) out = out.substring(0, marker);
+        String out = safe(text);
+        int eot = out.indexOf("<|EOT|>"); if (eot >= 0) out = out.substring(0, eot);
+        int next = out.indexOf("### Instruction:"); if (next >= 0) out = out.substring(0, next);
         return out.trim();
     }
+    private static String safe(String value) { return value == null ? "" : value; }
+    private void ensureOpen() { if (closed) throw new IllegalStateException("المحرك مغلق"); }
 
-    private static String readTextAsset(
-            AssetManager assets,
-            String name,
-            String fallback) {
-        try (InputStream in = assets.open(name);
-             BufferedReader reader = new BufferedReader(
-                     new InputStreamReader(in, StandardCharsets.UTF_8))) {
-            StringBuilder out = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                out.append(line).append('\n');
-                if (out.length() > 8000) break;
-            }
-            String value = out.toString().trim();
-            return value.isEmpty() ? fallback : value;
-        } catch (Exception ignored) {
-            return fallback;
-        }
-    }
-
-    private static void prepareModelDirectory(
-            AssetManager assets,
-            String assetPath,
-            File target) throws Exception {
-        File marker = new File(target, ".ready_deepseek_coder_v1");
-        if (marker.exists()
-                && new File(target, "genai_config.json").exists()) {
-            return;
-        }
-
-        deleteRecursive(target);
-        if (!target.mkdirs() && !target.isDirectory()) {
-            throw new IllegalStateException("Cannot create model directory");
-        }
-
-        copyAssetTree(assets, assetPath, target);
-        if (!new File(target, "genai_config.json").exists()) {
-            throw new IllegalStateException(
-                    "genai_config.json missing from model package");
-        }
-
-        if (!marker.createNewFile() && !marker.exists()) {
-            throw new IllegalStateException(
-                    "Cannot create model readiness marker");
-        }
-    }
-
-    private static void copyAssetTree(
-            AssetManager assets,
-            String assetPath,
-            File target) throws Exception {
-        String[] children = assets.list(assetPath);
-        if (children == null) {
-            throw new IllegalStateException(
-                    "Cannot read model asset: " + assetPath);
-        }
-
-        if (children.length == 0) {
-            File parent = target.getParentFile();
-            if (parent != null && !parent.exists() && !parent.mkdirs()) {
-                throw new IllegalStateException(
-                        "Cannot create: " + parent);
-            }
-            try (InputStream in = assets.open(assetPath);
-                 FileOutputStream out = new FileOutputStream(target)) {
-                byte[] buffer = new byte[1024 * 1024];
-                int n;
-                while ((n = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, n);
-                }
-                out.getFD().sync();
-            }
-            return;
-        }
-
-        if (!target.exists() && !target.mkdirs()) {
-            throw new IllegalStateException("Cannot create: " + target);
-        }
-
-        for (String child : children) {
-            copyAssetTree(
-                    assets,
-                    assetPath + "/" + child,
-                    new File(target, child));
-        }
-    }
-
-    private static void deleteRecursive(File file) {
-        if (!file.exists()) return;
-        if (file.isDirectory()) {
-            File[] children = file.listFiles();
-            if (children != null) {
-                for (File child : children) deleteRecursive(child);
-            }
-        }
-        file.delete();
-    }
-
-    private static String clean(String value) {
-        return value == null ? "" : value.trim();
-    }
-
-    @Override
-    public void close() {
-        cancelRequested = true;
-        try { tokenizer.close(); } catch (Exception ignored) {}
-        try { model.close(); } catch (Exception ignored) {}
+    @Override public synchronized void close() {
+        if (!closed) { closed = true; LlamaNative.close(); }
     }
 }
