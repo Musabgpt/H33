@@ -11,7 +11,7 @@ public final class NativeLlamaEngine implements AutoCloseable {
         System.loadLibrary("h33native");
     }
 
-    private long handle;
+    private volatile long handle;
 
     public NativeLlamaEngine(File modelFile) throws Exception {
         if (modelFile == null || !modelFile.isFile() || !modelFile.canRead()) {
@@ -24,15 +24,18 @@ public final class NativeLlamaEngine implements AutoCloseable {
     }
 
     public synchronized String generate(String prompt, int maxTokens) throws Exception {
-        if (handle == 0L) throw new IllegalStateException("Native model is closed");
-        String answer = nativeGenerate(handle, prompt == null ? "" : prompt,
+        long h = handle;
+        if (h == 0L) throw new IllegalStateException("Native model is closed");
+        String answer = nativeGenerate(h, prompt == null ? "" : prompt,
                 Math.max(16, Math.min(384, maxTokens)));
         if (answer == null) throw new IllegalStateException("Native inference failed");
         return answer;
     }
 
-    public synchronized void cancel() {
-        if (handle != 0L) nativeCancel(handle);
+    /** Cancellation is intentionally not synchronized so it can interrupt native generation. */
+    public void cancel() {
+        long h = handle;
+        if (h != 0L) nativeCancel(h);
     }
 
     @Override
