@@ -14,6 +14,26 @@ static llama_context * g_ctx = nullptr;
 static std::atomic<bool> g_cancel(false);
 static std::mutex g_lock;
 
+// CPU backends poll this callback inside graph execution. Checking only the
+// outer token loop cannot cancel an in-flight prompt evaluation.
+struct GenerationAbort {
+    llama_context * context;
+    std::chrono::steady_clock::time_point deadline;
+
+    GenerationAbort(llama_context * ctx, std::chrono::steady_clock::time_point until)
+            : context(ctx), deadline(until) {
+        llama_set_abort_callback(context, requested, this);
+    }
+    ~GenerationAbort() { llama_set_abort_callback(context, nullptr, nullptr); }
+    GenerationAbort(const GenerationAbort &) = delete;
+    GenerationAbort & operator=(const GenerationAbort &) = delete;
+
+    static bool requested(void * data) {
+        const auto * state = static_cast<const GenerationAbort *>(data);
+        return g_cancel.load() || std::chrono::steady_clock::now() >= state->deadline;
+    }
+};
+
 static std::string from_jstring(JNIEnv * env, jstring value) {
     if (!value) return {};
     const char * chars = env->GetStringUTFChars(value, nullptr);
@@ -103,13 +123,17 @@ Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jpromp
         if (!on_token && env->ExceptionCheck()) env->ExceptionClear();
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    GenerationAbort abort_state(g_ctx, deadline);
     const int context_limit = static_cast<int>(llama_n_ctx(g_ctx));
+    // llama_batch_get_one borrows this address until the next llama_decode.
+    // Keep it alive across iterations, as in llama.cpp's simple example.
+    llama_token token = 0;
 
-    while (!g_cancel.load() && std::chrono::steady_clock::now() < deadline
+    while (!GenerationAbort::requested(&abort_state)
             && position + batch.n_tokens < context_limit && max_tokens-- > 0) {
         if (llama_decode(g_ctx, batch) != 0) break;
         position += batch.n_tokens;
-        llama_token token = llama_sampler_sample(sampler, g_ctx, -1);
+        token = llama_sampler_sample(sampler, g_ctx, -1);
         if (llama_vocab_is_eog(vocab, token)) break;
         char small[256];
         int n = llama_token_to_piece(vocab, token, small, sizeof(small), 0, true);

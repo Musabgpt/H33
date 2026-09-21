@@ -84,11 +84,10 @@ jobs:
       - name: Smoke-test GGUF before packaging
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
         run: |
-          cmake --build /tmp/llama-host --target llama-cli --parallel 2
+          cmake --build /tmp/llama-host --target llama-simple --parallel 2
           MODEL=app/src/main/assets/model/deepseek-coder-1.3b-q3_k_s.gguf
-          timeout 45s /tmp/llama-host/bin/llama-cli -m "$MODEL" -p "Hi" -n 8 -c 256 -t 4 --no-display-prompt 2>&1 | tee smoke.txt
-          grep -Eiq '[[:alpha:]]{2,}' smoke.txt
-          echo "GGUF inference smoke test passed"
+          set -o pipefail
+          python scripts/model_smoke.py /tmp/llama-host/bin/llama-simple "$MODEL" | tee smoke.txt
 
       - name: Validate full model
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
