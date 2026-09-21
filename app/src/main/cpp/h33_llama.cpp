@@ -84,9 +84,9 @@ Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jpromp
     }
     // Always leave enough context for generation. Character-based truncation
     // can split UTF-8 and does not reliably constrain the token count.
-    if (tokens.size() > 350) {
+    if (tokens.size() > 192) {
         const llama_token bos = tokens.front();
-        tokens.erase(tokens.begin(), tokens.end() - 349);
+        tokens.erase(tokens.begin(), tokens.end() - 191);
         tokens.front() = bos;
     }
 
@@ -104,10 +104,11 @@ Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jpromp
         env->DeleteLocalRef(callback_class);
         if (!on_token && env->ExceptionCheck()) env->ExceptionClear();
     }
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    const int context_limit = static_cast<int>(llama_n_ctx(g_ctx));
 
     while (!g_cancel.load() && std::chrono::steady_clock::now() < deadline
-            && position + batch.n_tokens < 510 && max_tokens-- > 0) {
+            && position + batch.n_tokens < context_limit && max_tokens-- > 0) {
         if (llama_decode(g_ctx, batch) != 0) break;
         position += batch.n_tokens;
         llama_token token = llama_sampler_sample(sampler, g_ctx, -1);
