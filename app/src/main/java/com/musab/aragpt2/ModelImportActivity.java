@@ -10,16 +10,20 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** One-time system picker used to import the external GGUF model into app-private storage. */
 public final class ModelImportActivity extends Activity {
     private static final int PICK_MODEL = 7001;
+    private final ExecutorService copyExecutor = Executors.newSingleThreadExecutor();
+    private TextView status;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        TextView status = new TextView(this);
-        status.setText("H33\n\nاختر ملف DeepSeek-Coder GGUF\n\nسيتم نسخه إلى تخزين التطبيق مرة واحدة.");
+        status = new TextView(this);
+        status.setText("H33\n\nاختر ملف DeepSeek-Coder GGUF");
         status.setTextSize(20f);
         status.setPadding(48, 80, 48, 48);
         setContentView(status);
@@ -43,6 +47,11 @@ public final class ModelImportActivity extends Activity {
         }
 
         Uri uri = data.getData();
+        status.setText("جاري نسخ نموذج GGUF إلى تخزين H33…\n\nقد يستغرق ذلك عدة دقائق.");
+        copyExecutor.execute(() -> importModel(uri));
+    }
+
+    private void importModel(Uri uri) {
         try {
             File dir = new File(getFilesDir(), "models");
             if (!dir.exists() && !dir.mkdirs()) {
@@ -62,6 +71,12 @@ public final class ModelImportActivity extends Activity {
                     total += n;
                     if (total > 2L * 1024L * 1024L * 1024L) {
                         throw new IllegalStateException("Model is unexpectedly larger than 2 GB");
+                    }
+                    final long copied = total;
+                    if ((total % (64L * 1024L * 1024L)) < n) {
+                        runOnUiThread(() -> status.setText(
+                                "جاري نسخ النموذج… " +
+                                (copied / (1024L * 1024L)) + " MB"));
                     }
                 }
                 out.getFD().sync();
@@ -85,21 +100,30 @@ public final class ModelImportActivity extends Activity {
                 }
                 temp.delete();
             }
+
+            runOnUiThread(() -> {
+                status.setText("تم استيراد النموذج. جاري تشغيل H33…");
+                setResult(RESULT_OK);
+                finish();
+            });
         } catch (Exception ex) {
-            new android.app.AlertDialog.Builder(this)
+            runOnUiThread(() -> new android.app.AlertDialog.Builder(this)
                     .setTitle("فشل استيراد النموذج")
                     .setMessage(ex.getMessage() == null ? "خطأ غير معروف" : ex.getMessage())
                     .setPositiveButton("إغلاق", (d, w) -> finish())
-                    .show();
-            return;
+                    .show());
         }
-
-        finish();
     }
 
     private static boolean hasGgufMagic(File file) throws Exception {
         try (FileInputStream in = new FileInputStream(file)) {
             return in.read() == 'G' && in.read() == 'G' && in.read() == 'U' && in.read() == 'F';
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        copyExecutor.shutdownNow();
+        super.onDestroy();
     }
 }
