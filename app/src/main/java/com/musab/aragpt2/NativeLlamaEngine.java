@@ -38,7 +38,7 @@ public final class NativeLlamaEngine implements AutoCloseable {
         // Some local providers expose a real shared-storage path as a fallback.
         // This still keeps the GGUF outside the APK and does not copy the weights.
         if (handle == 0L) {
-            String directPath = directSharedStoragePath(resolver, modelUri);
+            String directPath = directSharedStoragePath(modelUri);
             if (directPath != null) {
                 File model = new File(directPath);
                 if (model.isFile() && model.canRead()) {
@@ -66,19 +66,17 @@ public final class NativeLlamaEngine implements AutoCloseable {
         }
     }
 
-    private static String directSharedStoragePath(ContentResolver resolver, Uri uri) {
+    private static String directSharedStoragePath(Uri uri) {
         try {
             if ("file".equalsIgnoreCase(uri.getScheme())) {
                 return uri.getPath();
             }
 
-            if (DocumentsContract.isDocumentUri(null, uri)) {
-                String documentId = DocumentsContract.getDocumentId(uri);
-                String path = ExternalGgufPathPolicy.primaryStoragePath(
-                        documentId,
-                        Environment.getExternalStorageDirectory().getAbsolutePath());
-                if (path != null) return path;
-            }
+            String documentId = DocumentsContract.getDocumentId(uri);
+            String path = ExternalGgufPathPolicy.primaryStoragePath(
+                    documentId,
+                    Environment.getExternalStorageDirectory().getAbsolutePath());
+            if (path != null) return path;
         } catch (Exception ignored) {
             // Fall through: SAF descriptor remains the primary path.
         }
