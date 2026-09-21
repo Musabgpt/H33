@@ -59,9 +59,7 @@ Java_com_musab_aragpt2_LlamaNative_open(JNIEnv * env, jclass, jstring path,
     cp.n_ubatch = 128;
     cp.n_threads = threads;
     cp.n_threads_batch = threads;
-    cp.type_k = GGML_TYPE_Q8_0;
-    cp.type_v = GGML_TYPE_Q8_0;
-    cp.no_perf = true;
+        cp.no_perf = true;
     g_ctx = llama_init_from_model(g_model, cp);
     if (!g_ctx) { release_all(); return js(env, "ذاكرة الهاتف غير كافية لإنشاء سياق النموذج"); }
     return js(env, "");
@@ -73,7 +71,7 @@ Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jpromp
     std::lock_guard<std::mutex> guard(g_lock);
     if (!g_model || !g_ctx) return js(env, "");
     g_cancel.store(false);
-    llama_memory_clear(llama_get_memory(g_ctx), true);
+    llama_memory_clear(llama_get_memory(g_ctx), false);
     const llama_vocab * vocab = llama_model_get_vocab(g_model);
     std::string prompt = from_jstring(env, jprompt);
     int count = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, true, true);
@@ -84,9 +82,9 @@ Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jpromp
     }
     // Always leave enough context for generation. Character-based truncation
     // can split UTF-8 and does not reliably constrain the token count.
-    if (tokens.size() > 192) {
+    if (tokens.size() > 128) {
         const llama_token bos = tokens.front();
-        tokens.erase(tokens.begin(), tokens.end() - 191);
+        tokens.erase(tokens.begin(), tokens.end() - 127);
         tokens.front() = bos;
     }
 
@@ -104,7 +102,7 @@ Java_com_musab_aragpt2_LlamaNative_generate(JNIEnv * env, jclass, jstring jpromp
         env->DeleteLocalRef(callback_class);
         if (!on_token && env->ExceptionCheck()) env->ExceptionClear();
     }
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     const int context_limit = static_cast<int>(llama_n_ctx(g_ctx));
 
     while (!g_cancel.load() && std::chrono::steady_clock::now() < deadline
