@@ -17,6 +17,7 @@ jobs:
     env:
       LLAMA_CPP_COMMIT: 335b21fcbda972777e4e9e69decad1f719cafeb3
       NDK_VERSION: 29.0.14206865
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - uses: actions/checkout@v4
@@ -27,13 +28,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK, NDK and CMake
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
+          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" \
             "platforms;android-36" \
             "build-tools;36.0.0" \
             "ndk;${NDK_VERSION}" \
@@ -47,7 +47,6 @@ jobs:
           git -C third_party/llama.cpp fetch --depth 1 origin "${LLAMA_CPP_COMMIT}"
           git -C third_party/llama.cpp checkout --detach "${LLAMA_CPP_COMMIT}"
           test "$(git -C third_party/llama.cpp rev-parse HEAD)" = "${LLAMA_CPP_COMMIT}"
-          git -C third_party/llama.cpp status --short
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
