@@ -86,7 +86,7 @@ jobs:
           cmake --build /tmp/llama-host --target llama-quantize --parallel 2
           mkdir -p app/src/main/assets/model
           /tmp/llama-host/bin/llama-quantize /tmp/deepseek-f16.gguf \
-            app/src/main/assets/model/deepseek-coder-1.3b-q3_k_s.gguf Q4_K_M
+            app/src/main/assets/model/deepseek-coder-1.3b-q3_k_s.gguf Q3_K_S
 
       - name: Validate full model
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.bundle_model) || contains(github.event.head_commit.message, '[full]') }}
