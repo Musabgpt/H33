@@ -27,12 +27,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * H33 local-only DeepSeek-Coder chat UI.
- * Visual language intentionally follows the previous H33 chat: compact header,
- * dynamic chat bubbles, rounded composer, new-chat and model-import actions.
- * No web/Google/candidate UI exists in this screen.
- */
+/** H33 classic chat UI on top of the local-only native DeepSeek-Coder engine. */
 public final class MainActivity extends Activity {
     private static final int IMPORT_REQUEST = 7001;
     private static final String MODEL_NAME = "deepseek-coder-1.3b-instruct.Q4_K_M.gguf";
@@ -40,7 +35,7 @@ public final class MainActivity extends Activity {
     private static final int PURPLE = Color.rgb(177, 112, 255);
     private static final int USER_PURPLE = Color.rgb(91, 55, 150);
     private static final int BG = Color.rgb(15, 15, 15);
-    private static final int PANEL = Color.rgb(40, 40, 40);
+    private static final int PANEL = Color.rgb(43, 43, 43);
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -78,7 +73,7 @@ public final class MainActivity extends Activity {
         return d;
     }
 
-    private Button actionButton(String text, int widthDp) {
+    private Button actionButton(String text, int widthDp, int heightDp) {
         Button b = new Button(this);
         b.setText(text);
         b.setTextColor(Color.WHITE);
@@ -86,9 +81,9 @@ public final class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setMinWidth(0);
         b.setMinHeight(0);
-        b.setPadding(dp(10), 0, dp(10), 0);
-        b.setBackground(rounded(PURPLE, 14));
-        b.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), dp(44)));
+        b.setPadding(dp(8), 0, dp(8), 0);
+        b.setBackground(rounded(PURPLE, 15));
+        b.setLayoutParams(new LinearLayout.LayoutParams(dp(widthDp), dp(heightDp)));
         return b;
     }
 
@@ -96,23 +91,23 @@ public final class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BG);
-        root.setPadding(dp(12), dp(8), dp(12), dp(6));
+        root.setPadding(dp(12), dp(8), dp(12), dp(7));
 
-        // Old H33 header style: title + compact "new" action.
+        // Classic H33 header: large centered title with the purple New button over the left.
         FrameLayout header = new FrameLayout(this);
-        header.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(54)));
+        header.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(67)));
 
         TextView title = new TextView(this);
-        title.setText("H33  DeepSeek Coder");
+        title.setText("H33 DeepSeek Coder");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(21f);
+        title.setTextSize(23f);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
         FrameLayout.LayoutParams titleLp = new FrameLayout.LayoutParams(-1, -1);
         header.addView(title, titleLp);
 
-        Button newChat = actionButton("＋ جديد", 96);
-        FrameLayout.LayoutParams newLp = new FrameLayout.LayoutParams(dp(96), dp(44), Gravity.START | Gravity.CENTER_VERTICAL);
+        Button newChat = actionButton("＋ جديد", 143, 59);
+        FrameLayout.LayoutParams newLp = new FrameLayout.LayoutParams(dp(143), dp(59), Gravity.START | Gravity.CENTER_VERTICAL);
         header.addView(newChat, newLp);
         newChat.setOnClickListener(v -> newChat());
         root.addView(header);
@@ -120,11 +115,11 @@ public final class MainActivity extends Activity {
         status = new TextView(this);
         status.setText("جاري تجهيز DeepSeek-Coder…");
         status.setTextColor(Color.LTGRAY);
-        status.setTextSize(12f);
-        status.setAlpha(0.82f);
+        status.setTextSize(13f);
+        status.setAlpha(0.86f);
         status.setGravity(Gravity.CENTER);
         status.setPadding(0, 0, 0, dp(5));
-        root.addView(status, new LinearLayout.LayoutParams(-1, dp(28)));
+        root.addView(status, new LinearLayout.LayoutParams(-1, dp(30)));
 
         scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -132,24 +127,25 @@ public final class MainActivity extends Activity {
         scroll.setPadding(0, 0, 0, dp(8));
         messages = new LinearLayout(this);
         messages.setOrientation(LinearLayout.VERTICAL);
-        messages.setPadding(dp(2), dp(4), dp(2), dp(12));
+        messages.setPadding(dp(2), dp(5), dp(2), dp(12));
         scroll.addView(messages, new ScrollView.LayoutParams(-1, -2));
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        // Previous H33 dynamic composer: plus / input / stop / send.
+        // Classic H33 composer: send / stop on the left, message field in the middle, + on the right.
         LinearLayout composer = new LinearLayout(this);
         composer.setOrientation(LinearLayout.HORIZONTAL);
         composer.setGravity(Gravity.CENTER_VERTICAL);
-        composer.setPadding(dp(8), dp(6), dp(8), dp(6));
-        composer.setBackground(rounded(PANEL, 30));
+        composer.setPadding(dp(8), dp(7), dp(8), dp(7));
+        composer.setMinimumHeight(dp(76));
+        composer.setBackground(rounded(PANEL, 34));
 
-        sendButton = actionButton("↑", 48);
-        sendButton.setTextSize(23f);
+        sendButton = actionButton("↑", 58, 58);
+        sendButton.setTextSize(24f);
         sendButton.setContentDescription("إرسال");
         sendButton.setEnabled(false);
         sendButton.setOnClickListener(v -> submit());
 
-        stopButton = actionButton("■", 48);
+        stopButton = actionButton("■", 58, 58);
         stopButton.setTextSize(15f);
         stopButton.setContentDescription("إيقاف");
         stopButton.setVisibility(View.GONE);
@@ -158,8 +154,8 @@ public final class MainActivity extends Activity {
         input = new EditText(this);
         input.setTextColor(Color.WHITE);
         input.setHintTextColor(Color.rgb(155, 155, 155));
-        input.setHint("اكتب رسالة…");
-        input.setTextSize(16f);
+        input.setHint("اكتب رسالة...");
+        input.setTextSize(17f);
         input.setSingleLine(false);
         input.setMaxLines(6);
         input.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
@@ -181,17 +177,16 @@ public final class MainActivity extends Activity {
             return false;
         });
 
-        plusButton = actionButton("+", 48);
-        plusButton.setTextSize(25f);
+        plusButton = actionButton("+", 58, 58);
+        plusButton.setTextSize(26f);
         plusButton.setOnClickListener(v -> startActivityForResult(new Intent(this, ModelImportActivity.class), IMPORT_REQUEST));
 
-        // LTR order gives the old visual arrangement: send/stop on the left, plus on the right.
         composer.addView(sendButton);
         composer.addView(stopButton);
         composer.addView(input, new LinearLayout.LayoutParams(0, -2, 1f));
         composer.addView(plusButton);
         LinearLayout.LayoutParams composerLp = new LinearLayout.LayoutParams(-1, -2);
-        composerLp.setMargins(0, dp(4), 0, dp(2));
+        composerLp.setMargins(0, dp(5), 0, dp(1));
         root.addView(composer, composerLp);
 
         setContentView(root);
@@ -231,7 +226,6 @@ public final class MainActivity extends Activity {
         if (generating || engine == null) return;
         String question = input.getText().toString().trim();
         if (question.isEmpty()) return;
-
         input.setText("");
         addBubble(question, true);
         userTurns.add(question);
@@ -250,9 +244,7 @@ public final class MainActivity extends Activity {
         executor.execute(() -> {
             try {
                 String answer = engine.generate(prompt, MAX_NEW_TOKENS);
-                if (answer == null || answer.trim().isEmpty()) {
-                    throw new IllegalStateException("النموذج لم يُرجع نصًا");
-                }
+                if (answer == null || answer.trim().isEmpty()) throw new IllegalStateException("النموذج لم يُرجع نصًا");
                 String cleaned = cleanAnswer(answer);
                 assistantTurns.set(answerIndex, cleaned);
                 main.post(() -> animateAnswer(answerBubble, cleaned, runId));
@@ -273,10 +265,7 @@ public final class MainActivity extends Activity {
         Runnable typer = new Runnable() {
             @Override public void run() {
                 if (runId != generationId) return;
-                if (index[0] >= text.length()) {
-                    finishGeneration();
-                    return;
-                }
+                if (index[0] >= text.length()) { finishGeneration(); return; }
                 int next = Math.min(text.length(), index[0] + 3);
                 bubble.setText(text.substring(0, next));
                 index[0] = next;
@@ -327,16 +316,14 @@ public final class MainActivity extends Activity {
         FrameLayout row = new FrameLayout(this);
         row.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
         row.setPadding(dp(4), dp(4), dp(4), dp(4));
-
         TextView bubble = new TextView(this);
         bubble.setText(text);
         bubble.setTextSize(16f);
         bubble.setTextColor(Color.WHITE);
-        bubble.setGravity(user ? Gravity.CENTER_VERTICAL | Gravity.START : Gravity.START | Gravity.CENTER_VERTICAL);
+        bubble.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         bubble.setPadding(dp(18), dp(13), dp(18), dp(13));
         bubble.setTextIsSelectable(true);
         bubble.setBackground(rounded(user ? USER_PURPLE : PANEL, 22));
-
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(-2, -2);
         lp.gravity = user ? Gravity.END : Gravity.START;
         lp.width = (int) (getResources().getDisplayMetrics().widthPixels * (user ? 0.78f : 0.90f));
@@ -369,9 +356,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateSendState() {
-        if (!generating && engine != null && input != null) {
-            sendButton.setEnabled(!input.getText().toString().trim().isEmpty());
-        }
+        if (!generating && engine != null && input != null) sendButton.setEnabled(!input.getText().toString().trim().isEmpty());
     }
 
     private void setComposerEnabled(boolean enabled) {
