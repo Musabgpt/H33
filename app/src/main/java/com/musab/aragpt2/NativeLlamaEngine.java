@@ -2,7 +2,9 @@ package com.musab.aragpt2;
 
 import android.content.ContentResolver;
 import android.net.Uri;
+import android.os.Environment;
 import android.os.ParcelFileDescriptor;
+import android.provider.DocumentsContract;
 
 import java.io.File;
 
@@ -29,13 +31,27 @@ public final class NativeLlamaEngine implements AutoCloseable {
         if (fd == null) throw new IllegalArgumentException("GGUF model cannot be opened");
         modelFd = fd;
 
-        // llama.cpp's file loader needs a filesystem path. Keep the SAF descriptor
-        // open so /proc/self/fd/<fd> remains valid for the native model lifetime.
-        String procPath = "/proc/self/fd/" + fd.getFd();
-        handle = nativeCreate(procPath, 3072, 4);
+        // Pass the actual granted descriptor to llama.cpp. The pinned runtime exposes
+        // llama_model_load_from_file_ptr(), so no /proc/self/fd re-open is required.
+        handle = nativeCreateFromFd(fd.getFd(), 3072, 4);
+
+        // Some local providers expose a real shared-storage path as a fallback.
+        // This still keeps the GGUF outside the APK and does not copy the weights.
+        if (handle == 0L) {
+            String directPath = directSharedStoragePath(resolver, modelUri);
+            if (directPath != null) {
+                File model = new File(directPath);
+                if (model.isFile() && model.canRead()) {
+                    handle = nativeCreate(model.getAbsolutePath(), 3072, 4);
+                }
+            }
+        }
+
         if (handle == 0L) {
             closeFd();
-            throw new IllegalStateException("llama.cpp could not load the selected GGUF model");
+            throw new IllegalStateException(
+                    "llama.cpp could not load the selected GGUF model. " +
+                    "The selected provider did not expose a seekable GGUF file descriptor.");
         }
     }
 
@@ -48,6 +64,25 @@ public final class NativeLlamaEngine implements AutoCloseable {
         if (handle == 0L) {
             throw new IllegalStateException("llama.cpp could not load the GGUF model");
         }
+    }
+
+    private static String directSharedStoragePath(ContentResolver resolver, Uri uri) {
+        try {
+            if ("file".equalsIgnoreCase(uri.getScheme())) {
+                return uri.getPath();
+            }
+
+            if (DocumentsContract.isDocumentUri(null, uri)) {
+                String documentId = DocumentsContract.getDocumentId(uri);
+                String path = ExternalGgufPathPolicy.primaryStoragePath(
+                        documentId,
+                        Environment.getExternalStorageDirectory().getAbsolutePath());
+                if (path != null) return path;
+            }
+        } catch (Exception ignored) {
+            // Fall through: SAF descriptor remains the primary path.
+        }
+        return null;
     }
 
     public synchronized String generate(String prompt, int maxTokens) throws Exception {
@@ -82,6 +117,7 @@ public final class NativeLlamaEngine implements AutoCloseable {
     }
 
     private static native long nativeCreate(String path, int contextSize, int threads);
+    private static native long nativeCreateFromFd(int fd, int contextSize, int threads);
     private static native String nativeGenerate(long handle, String prompt, int maxTokens);
     private static native void nativeCancel(long handle);
     private static native void nativeDestroy(long handle);
