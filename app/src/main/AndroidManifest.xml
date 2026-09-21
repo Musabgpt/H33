@@ -3,10 +3,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:allowBackup="false"
-        android:label="H33 Qwen عربي"
+        android:label="H33 DeepSeek Coder"
         android:usesCleartextTraffic="false"
         android:supportsRtl="true"
         android:theme="@style/Theme.AraGPT2">
+        <activity
+            android:name=".ModelImportActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
