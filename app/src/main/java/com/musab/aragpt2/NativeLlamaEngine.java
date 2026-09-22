@@ -29,8 +29,8 @@ public final class NativeLlamaEngine implements AutoCloseable {
         if (fd == null) throw new IllegalArgumentException("GGUF model cannot be opened");
         modelFd = fd;
 
-        // llama.cpp's file loader needs a filesystem path. Keep the SAF descriptor
-        // open so /proc/self/fd/<fd> remains valid for the native model lifetime.
+        // Keep the SAF descriptor open so /proc/self/fd/<fd> remains valid
+        // for the native model lifetime.
         String procPath = "/proc/self/fd/" + fd.getFd();
         handle = nativeCreate(procPath, 3072, 4);
         if (handle == 0L) {
@@ -50,12 +50,29 @@ public final class NativeLlamaEngine implements AutoCloseable {
         }
     }
 
+    /**
+     * Legacy raw-prompt generation. Kept for compatibility; chat generation
+     * should use generateChat() so the GGUF's chat template is applied natively.
+     */
     public synchronized String generate(String prompt, int maxTokens) throws Exception {
         long h = handle;
         if (h == 0L) throw new IllegalStateException("Native model is closed");
         String answer = nativeGenerate(h, prompt == null ? "" : prompt,
                 Math.max(16, Math.min(384, maxTokens)));
         if (answer == null) throw new IllegalStateException("Native inference failed");
+        return answer;
+    }
+
+    /** Chat generation using llama.cpp's model-native tokenizer.chat_template. */
+    public synchronized String generateChat(String[] roles, String[] contents, int maxTokens) throws Exception {
+        long h = handle;
+        if (h == 0L) throw new IllegalStateException("Native model is closed");
+        if (roles == null || contents == null || roles.length != contents.length || roles.length == 0) {
+            throw new IllegalArgumentException("Chat messages are invalid");
+        }
+        String answer = nativeGenerateChat(h, roles, contents,
+                Math.max(16, Math.min(384, maxTokens)));
+        if (answer == null) throw new IllegalStateException("Native chat inference failed");
         return answer;
     }
 
@@ -83,6 +100,7 @@ public final class NativeLlamaEngine implements AutoCloseable {
 
     private static native long nativeCreate(String path, int contextSize, int threads);
     private static native String nativeGenerate(long handle, String prompt, int maxTokens);
+    private static native String nativeGenerateChat(long handle, String[] roles, String[] contents, int maxTokens);
     private static native void nativeCancel(long handle);
     private static native void nativeDestroy(long handle);
 }
